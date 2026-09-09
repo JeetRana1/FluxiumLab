@@ -332,9 +332,14 @@ const resolveMovieProvider = (provider) => {
       return void 0;
   }
 };
+const HDSTREAM_TV_EPISODE_SHIFTS = {
+  "262838": { 2: { shiftFrom: 6, shift: 1 } }
+};
 const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode) => {
   const requestedSeason = Number(season || 1);
   const requestedEpisode = Number(episode || 1);
+  const episodeShift = HDSTREAM_TV_EPISODE_SHIFTS[String(id || "").trim()]?.[requestedSeason];
+  const shiftedEpisode = episodeShift && requestedEpisode >= episodeShift.shiftFrom ? requestedEpisode + episodeShift.shift : requestedEpisode;
   let targetId = String(id || "").trim();
   try {
     const tmdbInfoRes = await request.server.inject({
@@ -397,7 +402,7 @@ const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode) 
     return Number.isFinite(value) && value > 0 ? value : 1;
   };
   const match = entries.find(
-    (entry) => !isBonusEntry(entry) && getEntrySeason(entry) === requestedSeason && Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === requestedEpisode
+    (entry) => !isBonusEntry(entry) && getEntrySeason(entry) === requestedSeason && Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode
   );
   const normalizeEpisodeId = (entry) => {
     const raw = String(entry?.episodeId || entry?.url || entry?.id || "").trim();
@@ -406,7 +411,7 @@ const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode) 
   if (match)
     return normalizeEpisodeId(match);
   const episodeOnlyMatches = numberedEntries.filter(
-    (entry) => Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === requestedEpisode
+    (entry) => Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode
   );
   if (episodeOnlyMatches.length === 1) {
     return normalizeEpisodeId(episodeOnlyMatches[0]);

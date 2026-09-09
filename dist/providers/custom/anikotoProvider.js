@@ -59,9 +59,11 @@ const hasSources = (result) => Boolean(
   result?.sub?.sources?.some((source) => String(source?.url || "").trim()) || result?.dub?.sources?.some((source) => String(source?.url || "").trim())
 );
 const fetchCurrentAniKotoSources = async (episodeId, server) => {
-  const match = episodeId.match(/^(.+)\$episode\$(\d+)$/);
+  const match = episodeId.match(/^([a-z0-9][a-z0-9-]{0,199})\$episode\$([1-9]\d{0,5})$/i);
   if (!match)
     return null;
+  const signal = AbortSignal.timeout(3e4);
+  const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal });
   const slug = match[1];
   const episodeNumber = Number(match[2]);
   const watchResponse = await fetch(`${BASE_URL}/watch/${encodeURIComponent(slug)}`, {
@@ -144,7 +146,10 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
         const embedId = extractEmbedId(await embedResponse.text());
         if (!embedId)
           continue;
-        const embedOrigin = new URL(embedUrl).origin;
+        const embedLocation = new URL(embedUrl);
+        const embedOrigin = embedLocation.origin;
+        const mirror = (embedLocation.searchParams.get("s") || "").replace(/[^a-z0-9_-]/gi, "");
+        const mirrorQuery = mirror ? `&s=${encodeURIComponent(mirror)}` : "";
         const sourceUrls = [
           `${embedOrigin}/stream/getSourcesNew?id=${encodeURIComponent(embedId)}&id=${encodeURIComponent(embedId)}`,
           `${embedOrigin}/stream/getSources?id=${encodeURIComponent(embedId)}`
@@ -157,9 +162,11 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
         let sourceJson = null;
         for (const sourceUrl of sourceUrls) {
           const sourceOrigin = new URL(sourceUrl).origin;
-          const sourceResponse = await fetch(sourceUrl, {
+          const sourceResponse = await fetch(sourceUrl + mirrorQuery, {
             headers: { ...ajaxHeaders(), Origin: sourceOrigin, Referer: embedUrl }
           });
+          if (!sourceResponse.ok)
+            continue;
           const candidate = await parseJson(sourceResponse);
           if (candidate?.sources?.file || candidate?.sources?.url || candidate?.source || candidate?.url) {
             sourceJson = candidate;

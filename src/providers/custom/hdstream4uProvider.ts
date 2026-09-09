@@ -42,6 +42,20 @@ const GATE_HOSTS = [
 
 const RAW_FILE_HOSTS = ['r2.dev', 'googleusercontent.com', 'acek-cdn.com', 'mindbodywellness.space'];
 
+// HDHub4u occasionally numbers a standalone special inside the season's episode
+// list (e.g. India's Got Latent S2 labels the Netflix-only "Varun Dhawan" episode
+// as EPISODE 6, which shifts the real EP6/Rakhi episode down to EPISODE 7 on the
+// page). These overrides move such rows out of the numbered list into a dedicated
+// bonus category so TMDB SxEy numbering stays intact. Key: hdstream page media-id.
+const HDSTREAM_SPECIAL_BONUS_OVERRIDES: Record<string, { token: string; label: string; seasonName: string; category: string }> = {
+  'indias-got-latent-season-2-hindi-webrip-all-episodes': {
+    token: 'ucp5r8',
+    label: 'Netflix Special: Varun Dhawan',
+    seasonName: 'Netflix Special',
+    category: 'netflix-special',
+  },
+};
+
 class SimpleCache<T> {
   private map = new Map<string, { value: T; expires: number }>();
 
@@ -61,6 +75,16 @@ class SimpleCache<T> {
 }
 
 const cache = new SimpleCache<any>();
+const pending = new Map<string, Promise<any>>();
+
+// Share only in-flight work; failures must remain retryable and keep no new TTL.
+const singleFlight = <T>(key: string, load: () => Promise<T>): Promise<T> => {
+  const existing = pending.get(key);
+  if (existing) return existing;
+  const promise = Promise.resolve().then(load).finally(() => pending.delete(key));
+  pending.set(key, promise);
+  return promise;
+};
 
 const requestConfig = {
   timeout: 20000,
@@ -952,7 +976,9 @@ const resolveToPlayer = async (startUrl: string, referer: string) => {
       candidates.find((url) => /(?:hdstream4u|morencius)\.[^/]+\/(?:file|embed)\//i.test(url)) ||
       candidates.find((url) => isGateUrl(url)) ||
       candidates.find((url) => isStreamHost(url));
-    if (!player || player === currentUrl) break;
+    if (!player || player === currentUrl) {
+      return { playerUrl: currentUrl, referer: currentReferer, origin: safeOrigin(currentReferer), html };
+    }
     currentReferer = currentUrl;
     currentUrl = player;
   }
@@ -1206,16 +1232,26 @@ const extractWatchhdSourcesWithPlaywright = async (
   }
 };
 
+const fetchTmdbMetadata = (id: string, mediaType: string): Promise<any> => {
+  const key = `hdstream4u:tmdb:${mediaType}:${id}`;
+  return singleFlight(key, async () => {
+    const cached = cache.get(key);
+    if (cached) return cached;
+    const response = await axios.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${TMDB_KEY}`, {
+      timeout: 15000,
+      headers: { 'User-Agent': USER_AGENT },
+    });
+    if (response.data?.id) cache.set(key, response.data, 10 * 60 * 1000);
+    return response.data || {};
+  });
+};
+
 const resolveTmdbNumericIdToPage = async (id: string, type = 'movie'): Promise<string> => {
   if (!/^\d+$/.test(String(id || '')) || !TMDB_KEY) return '';
   const mediaTypes = Array.from(new Set([type === 'tv' ? 'tv' : 'movie', type === 'tv' ? 'movie' : 'tv']));
   for (const mediaType of mediaTypes) {
     try {
-      const response = await axios.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${TMDB_KEY}`, {
-        timeout: 15000,
-        headers: { 'User-Agent': USER_AGENT },
-      });
-      const payload = response.data || {};
+      const payload = await fetchTmdbMetadata(id, mediaType);
       const titleCandidates = [payload?.title, payload?.name, payload?.original_title, payload?.original_name]
         .filter((value, index, arr) => typeof value === 'string' && value.trim() && arr.indexOf(value) === index)
         .map((value) => String(value).trim());
@@ -1251,11 +1287,8 @@ const fetchTmdbBasicInfo = async (id: string, type = 'movie'): Promise<any | nul
   const mediaTypes = Array.from(new Set([type === 'tv' ? 'tv' : 'movie', type === 'tv' ? 'movie' : 'tv']));
   for (const mediaType of mediaTypes) {
     try {
-      const response = await axios.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${TMDB_KEY}`, {
-        timeout: 15000,
-        headers: { 'User-Agent': USER_AGENT },
-      });
-      if (response.data) return { ...response.data, media_type: mediaType };
+      const payload = await fetchTmdbMetadata(id, mediaType);
+      if (payload?.id) return { ...payload, media_type: mediaType };
     } catch {
       // try next type
     }
@@ -1265,6 +1298,10 @@ const fetchTmdbBasicInfo = async (id: string, type = 'movie'): Promise<any | nul
 
 export class HdStream4uProvider {
   static async search(query: string, page = 1) {
+    return singleFlight(JSON.stringify(['search', query, page]), () => this.searchUnshared(query, page));
+  }
+
+  private static async searchUnshared(query: string, page: number) {
     if (!query) return { error: 'Query is required' };
     const cacheKey = `hdstream4u:search:${query}:${page}`;
     const cached = cache.get(cacheKey);
@@ -1368,6 +1405,10 @@ export class HdStream4uProvider {
   }
 
   static async fetchMediaInfo(id: string, type = 'movie') {
+    return singleFlight(JSON.stringify(['info', id, type]), () => this.fetchMediaInfoUnshared(id, type));
+  }
+
+  private static async fetchMediaInfoUnshared(id: string, type: string) {
     if (!id) return { error: 'id is required' };
     try {
       const originalId = String(id || '').trim();
@@ -1425,22 +1466,60 @@ export class HdStream4uProvider {
         [...extractBonusEpisodeWatchEntries(html), ...bonusLinkEntries],
         (item) => `${item.number}:${item.url}`,
       );
-      const episodes = episodeWatchEntries.length
-        ? episodeWatchEntries.map((entry) => ({
-            id: mediaIdFromUrl(entry.url),
-            title: entry.title,
-            number: entry.number,
-            url: entry.url,
-            isBonus: false,
-          }))
-        : extractEpisodes($, pageUrl).map((episode) => ({ ...episode, isBonus: false }));
-      const bonusEpisodes = bonusEpisodeWatchEntries.map((entry) => ({
+      const episodes: Array<{
+        id: string;
+        title: string;
+        number: number;
+        url: string;
+        isBonus: boolean;
+        seasonNameOverride?: string;
+        categoryOverride?: string;
+      }> =
+        episodeWatchEntries.length
+          ? episodeWatchEntries.map((entry) => ({
+              id: mediaIdFromUrl(entry.url),
+              title: entry.title,
+              number: entry.number,
+              url: entry.url,
+              isBonus: false,
+            }))
+          : extractEpisodes($, pageUrl).map((episode) => ({ ...episode, isBonus: false }));
+      const bonusEpisodes: Array<{
+        id: string;
+        title: string;
+        number: number;
+        url: string;
+        isBonus: boolean;
+        seasonNameOverride?: string;
+        categoryOverride?: string;
+      }> = bonusEpisodeWatchEntries.map((entry) => ({
         id: mediaIdFromUrl(entry.url),
         title: entry.title,
         number: entry.number,
         url: entry.url,
         isBonus: true,
       }));
+      const specialOverride = HDSTREAM_SPECIAL_BONUS_OVERRIDES[mediaIdFromUrl(pageUrl)];
+      if (specialOverride) {
+        const tokenIndex = episodes.findIndex((episode) => {
+          const tokenCheck = `${episode?.id || ''} ${episode?.url || ''}`;
+          return tokenCheck.includes(specialOverride.token);
+        });
+        if (tokenIndex >= 0) {
+          const [specialEpisode] = episodes.splice(tokenIndex, 1);
+          if (specialEpisode) {
+            bonusEpisodes.push({
+              id: specialEpisode.id,
+              title: specialOverride.label,
+              number: specialEpisode.number,
+              url: specialEpisode.url,
+              isBonus: true,
+              seasonNameOverride: specialOverride.seasonName,
+              categoryOverride: specialOverride.category,
+            });
+          }
+        }
+      }
       const watchLinks = extractWatchLinks($, pageUrl, html);
       const servers = watchLinks.map((href) => ({
         name: /hubstream|watchhd|hdstream4u\.com\/file|morencius\.com\/file/i.test(href) ? 'Watch Online' : 'HDHub4u',
@@ -1483,8 +1562,8 @@ export class HdStream4uProvider {
               episodeNumber: episode.number,
               seasonNumber: episode.isBonus ? 0 : extractSeasonNumber(rawTitle || pageUrl),
               bonusSeasonNumber: episode.isBonus ? extractSeasonNumber(rawTitle || pageUrl) : undefined,
-              seasonName: episode.isBonus ? 'Bonus' : `Season ${extractSeasonNumber(rawTitle || pageUrl)}`,
-              category: episode.isBonus ? 'bonus' : 'season',
+              seasonName: episode.isBonus ? episode.seasonNameOverride || 'Bonus' : `Season ${extractSeasonNumber(rawTitle || pageUrl)}`,
+              category: episode.isBonus ? episode.categoryOverride || 'bonus' : 'season',
               url: episode.url,
             }))
           : [
@@ -1608,12 +1687,19 @@ export class HdStream4uProvider {
           .filter((source: any) => isRawVideoUrl(source.url));
 
         // Immediately fetch hubstream manifests while the session is fresh.
-        for (const src of rawSources) {
+        await Promise.all(rawSources.map(async (src) => {
           if (/hubstream\.(?:art|pw|cc|ink|foo|boo)/i.test(src.url) && src.isM3U8) {
             try {
               const body = await page.evaluate(
                 async (url: string) => {
-                  try { const r = await fetch(url, { credentials: 'include', headers: { Referer: document.location.href } }); if (!r.ok) return null; return await r.text(); } catch { return null; }
+                  const controller = new AbortController();
+                  const timer = setTimeout(() => controller.abort(), 4000);
+                  try {
+                    const r = await fetch(url, { signal: controller.signal, credentials: 'include', headers: { Referer: document.location.href } });
+                    if (!r.ok) return null;
+                    return await r.text();
+                  } catch { return null; }
+                  finally { clearTimeout(timer); }
                 },
                 src.url,
               ).catch(() => null);
@@ -1622,7 +1708,7 @@ export class HdStream4uProvider {
               }
             } catch {}
           }
-        }
+        }));
       }
 
       if (!payload) {
@@ -1780,6 +1866,16 @@ export class HdStream4uProvider {
     server = 'hdstream4u',
     _strictServer = false,
     options: { mediaId?: string } = {},
+  ): Promise<any> {
+    return singleFlight(JSON.stringify(['watch', episodeId, server, _strictServer, options.mediaId]),
+      () => this.fetchSourcesUnshared(episodeId, server, _strictServer, options));
+  }
+
+  private static async fetchSourcesUnshared(
+    episodeId: string,
+    server: string,
+    _strictServer: boolean,
+    options: { mediaId?: string },
   ): Promise<any> {
     const cacheKey = `fetchSources:${String(episodeId || '').trim()}|${server}|${String(
       options?.mediaId || '',
@@ -2266,7 +2362,7 @@ export class HdStream4uProvider {
         }
       }
 
-      const playerHtml = await fetchText(resolved.playerUrl, resolved.referer);
+      const playerHtml = resolved.html ?? await fetchText(resolved.playerUrl, resolved.referer);
       const parsed = {
         sources: extractStreams(playerHtml, resolved.playerUrl),
         subtitles: extractSubtitles(playerHtml, resolved.playerUrl),

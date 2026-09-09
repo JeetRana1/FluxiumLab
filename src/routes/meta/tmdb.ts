@@ -381,6 +381,16 @@ const resolveMovieProvider = (provider?: string) => {
   }
 };
 
+// Some HDHub4u pages number a standalone special inside the season's episode
+// list, shifting every later episode by +1 relative to TMDB (e.g. "India's Got
+// Latent" S2 labels the Netflix-only "Varun Dhawan" episode as EPISODE 6, so
+// TMDB S2E6 "Rakhi Sawant" lives at hdstream EP7). This map translates the
+// requested TMDB episode: when requestedEpisode >= shiftFrom, look for provider
+// episode = requestedEpisode + shift. Keyed by TMDB numeric id, then season.
+const HDSTREAM_TV_EPISODE_SHIFTS: Record<string, Record<number, { shiftFrom: number; shift: number }>> = {
+  '262838': { 2: { shiftFrom: 6, shift: 1 } },
+};
+
 const resolveHdstream4uTvEpisodeId = async (
   request: FastifyRequest,
   id: string,
@@ -390,6 +400,11 @@ const resolveHdstream4uTvEpisodeId = async (
 ): Promise<string> => {
   const requestedSeason = Number(season || 1);
   const requestedEpisode = Number(episode || 1);
+  const episodeShift = HDSTREAM_TV_EPISODE_SHIFTS[String(id || '').trim()]?.[requestedSeason];
+  const shiftedEpisode =
+    episodeShift && requestedEpisode >= episodeShift.shiftFrom
+      ? requestedEpisode + episodeShift.shift
+      : requestedEpisode;
 
   let targetId = String(id || '').trim();
   try {
@@ -481,7 +496,7 @@ const resolveHdstream4uTvEpisodeId = async (
     (entry: any) =>
       !isBonusEntry(entry) &&
       getEntrySeason(entry) === requestedSeason &&
-      Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === requestedEpisode,
+      Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode,
   );
   const normalizeEpisodeId = (entry: any): string => {
     const raw = String(entry?.episodeId || entry?.url || entry?.id || '').trim();
@@ -503,7 +518,7 @@ const resolveHdstream4uTvEpisodeId = async (
   // number matching so TMDB SxEy requests can still resolve.
   const episodeOnlyMatches = numberedEntries.filter(
     (entry: any) =>
-      Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === requestedEpisode,
+      Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode,
   );
   if (episodeOnlyMatches.length === 1) {
     return normalizeEpisodeId(episodeOnlyMatches[0]);

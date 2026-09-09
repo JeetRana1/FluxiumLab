@@ -1025,14 +1025,18 @@ export const extractPlaybackWithPlaywright = async (
         /hubstream\.(?:art|pw|cc|ink|foo|boo)|as-cdn\d+\.(?:top|ac|pro|xyz|click|link|net|cc|org)/i.test(u) &&
         /\.m3u8(?:\?|$)/i.test(u),
     );
-    for (const m3u8Url of hubstreamM3uUrls) {
-      if (hlsManifestCache.has(m3u8Url)) continue;
+    // Prefetch is optional: one slow CDN must not serialize or stall extraction.
+    await Promise.all(hubstreamM3uUrls.map(async (m3u8Url) => {
+      if (getCachedHlsManifest(m3u8Url)) return;
       try {
         const body = await page
           .evaluate(
             async (url: string) => {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 4000);
               try {
                 const r = await fetch(url, {
+                  signal: controller.signal,
                   credentials: 'include',
                   headers: { Referer: document.location.href },
                 });
@@ -1040,6 +1044,8 @@ export const extractPlaybackWithPlaywright = async (
                 return await r.text();
               } catch {
                 return null;
+              } finally {
+                clearTimeout(timer);
               }
             },
             m3u8Url,
@@ -1055,7 +1061,7 @@ export const extractPlaybackWithPlaywright = async (
       } catch {
         // Best-effort; playback should not block on manifest prefetch.
       }
-    }
+    }));
 
     await context.close();
   } catch (err) {

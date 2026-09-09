@@ -24,21 +24,76 @@ module.exports = __toCommonJS(anikoto_exports);
 var import_extensions = require("@consumet/extensions");
 var import_anikotoProvider = require("../../providers/custom/anikotoProvider");
 const routes = async (fastify, _options) => {
-  const createProvider = () => new import_extensions.ANIME.AniKoto();
+  const createProvider = () => {
+    const instance = new import_extensions.ANIME.AniKoto();
+    instance.client.defaults.timeout = 12e3;
+    return instance;
+  };
   const provider = createProvider();
   const sourceCache = /* @__PURE__ */ new Map();
   const SOURCE_CACHE_TTL_MS = 5 * 60 * 1e3;
-  fastify.get("/", async (_request, reply) => reply.send({ provider: "anikoto", baseUrl: provider.toString.baseUrl }));
+  const pending = /* @__PURE__ */ new Map();
+  const cachedRequest = async (key, load, valid) => {
+    const cached = sourceCache.get(key);
+    if (cached && cached.expires > Date.now())
+      return cached.value;
+    if (pending.has(key))
+      return pending.get(key);
+    const request = Promise.resolve().then(load).then((value) => {
+      if (valid(value)) {
+        for (const [id, entry] of sourceCache)
+          if (entry.expires <= Date.now())
+            sourceCache.delete(id);
+        if (sourceCache.size >= 256)
+          sourceCache.delete(sourceCache.keys().next().value);
+        sourceCache.set(key, { expires: Date.now() + SOURCE_CACHE_TTL_MS, value });
+      }
+      return value;
+    }).finally(() => pending.delete(key));
+    pending.set(key, request);
+    return request;
+  };
+  fastify.get(
+    "/",
+    async (_request, reply) => reply.send({ provider: "anikoto", baseUrl: provider.toString.baseUrl })
+  );
   fastify.get("/:query", async (request, reply) => {
     try {
-      return reply.send(await provider.search(String(request.params.query), Number(request.query?.page) || 1));
+      const query = String(request.params.query).trim();
+      const page = Number(request.query?.page || 1);
+      if (!query || query.length > 200 || !Number.isInteger(page) || page < 1 || page > 1e3) {
+        return reply.status(400).send({ message: "Invalid AniKoto search" });
+      }
+      return reply.send(
+        await cachedRequest(
+          `search:${query}:${page}`,
+          () => createProvider().search(query, page),
+          (value) => value?.results?.length > 0
+        )
+      );
     } catch (error) {
       return reply.status(502).send({ message: error?.message || "AniKoto search failed" });
     }
   });
   fastify.get("/info", async (request, reply) => {
     try {
-      return reply.send(await provider.fetchAnimeInfo(String(request.query?.id || "")));
+      let id = String(request.query?.id || "");
+      if (/^https?:\/\//i.test(id)) {
+        const url = new URL(id);
+        if (url.origin !== "https://anikoto.cz" || url.username || url.password) {
+          return reply.status(400).send({ message: "Invalid AniKoto title ID" });
+        }
+        id = url.pathname.replace(/^\/watch\//, "").replace(/\/ep-\d+\/?$/, "").replace(/\/$/, "");
+      }
+      if (!/^[a-z0-9][a-z0-9-]{0,199}$/i.test(id))
+        return reply.status(400).send({ message: "Invalid AniKoto title ID" });
+      return reply.send(
+        await cachedRequest(
+          `info:${id}`,
+          () => createProvider().fetchAnimeInfo(id),
+          (value) => value?.episodes?.length > 0
+        )
+      );
     } catch (error) {
       return reply.status(502).send({ message: error?.message || "AniKoto info failed" });
     }
@@ -47,30 +102,43 @@ const routes = async (fastify, _options) => {
     try {
       const episodeId = String(request.params.episodeId);
       const server = request.query?.server;
-      const cacheKey = `${episodeId}|${server || ""}`;
-      const cached = sourceCache.get(cacheKey);
-      if (cached && cached.expires > Date.now())
-        return reply.send(cached.value);
-      let result = null;
-      try {
-        result = await (0, import_anikotoProvider.fetchCurrentAniKotoSources)(episodeId, server);
-      } catch (error) {
-        request.log.warn({ err: error, episodeId }, "Current AniKoto extraction failed; using extension provider");
+      if (!/^[a-z0-9][a-z0-9-]{0,199}\$episode\$[1-9]\d{0,5}$/i.test(episodeId) || server !== void 0 && (typeof server !== "string" || server.length > 80)) {
+        return reply.status(400).send({ message: "Invalid AniKoto episode or server" });
       }
-      if (result) {
-        sourceCache.set(cacheKey, { expires: Date.now() + SOURCE_CACHE_TTL_MS, value: result });
-        return reply.send(result);
-      }
-      try {
-        result = await createProvider().fetchEpisodeSources(episodeId, server);
-      } catch (firstError) {
-        request.log.warn({ err: firstError, episodeId }, "AniKoto watch retry with fresh provider");
-        result = await createProvider().fetchEpisodeSources(episodeId, server);
-      }
-      if (result) {
-        sourceCache.set(cacheKey, { expires: Date.now() + SOURCE_CACHE_TTL_MS, value: result });
-      }
-      return reply.send(result);
+      const cacheKey = `watch:${episodeId}|${server || ""}`;
+      const value = await cachedRequest(
+        cacheKey,
+        async () => {
+          let result = null;
+          try {
+            result = await (0, import_anikotoProvider.fetchCurrentAniKotoSources)(episodeId, server);
+          } catch (error) {
+            request.log.warn(
+              { err: error, episodeId },
+              "Current AniKoto extraction failed; using extension provider"
+            );
+          }
+          if (result) {
+            return result;
+          }
+          try {
+            result = await createProvider().fetchEpisodeSources(episodeId, server);
+          } catch (firstError) {
+            request.log.warn(
+              { err: firstError, episodeId },
+              "AniKoto watch retry with fresh provider"
+            );
+            result = await createProvider().fetchEpisodeSources(episodeId, server);
+          }
+          return result;
+        },
+        (result) => [
+          ...result?.sources || [],
+          ...result?.sub?.sources || [],
+          ...result?.dub?.sources || []
+        ].some((source) => source?.url)
+      );
+      return reply.send(value);
     } catch (error) {
       return reply.status(502).send({ message: error?.message || "AniKoto source extraction failed" });
     }

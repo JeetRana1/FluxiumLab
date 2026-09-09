@@ -924,14 +924,17 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
       const hubstreamM3uUrls = [...discovered.keys()].filter(
         (u) => /hubstream\.(?:art|pw|cc|ink|foo|boo)|as-cdn\d+\.(?:top|ac|pro|xyz|click|link|net|cc|org)/i.test(u) && /\.m3u8(?:\?|$)/i.test(u)
       );
-      for (const m3u8Url of hubstreamM3uUrls) {
-        if (hlsManifestCache.has(m3u8Url))
-          continue;
+      await Promise.all(hubstreamM3uUrls.map(async (m3u8Url) => {
+        if (getCachedHlsManifest(m3u8Url))
+          return;
         try {
           const body = await page.evaluate(
             async (url) => {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 4e3);
               try {
                 const r = await fetch(url, {
+                  signal: controller.signal,
                   credentials: "include",
                   headers: { Referer: document.location.href }
                 });
@@ -940,6 +943,8 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
                 return await r.text();
               } catch {
                 return null;
+              } finally {
+                clearTimeout(timer);
               }
             },
             m3u8Url
@@ -953,7 +958,7 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
           }
         } catch {
         }
-      }
+      }));
       await context.close();
     } catch (err) {
       console.error(`[Playwright extractor failed] ${normalizedEmbed}`, err);

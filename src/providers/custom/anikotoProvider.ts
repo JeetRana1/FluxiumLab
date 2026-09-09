@@ -46,8 +46,11 @@ export const fetchCurrentAniKotoSources = async (
   episodeId: string,
   server?: string,
 ): Promise<any | null> => {
-  const match = episodeId.match(/^(.+)\$episode\$(\d+)$/);
+  const match = episodeId.match(/^([a-z0-9][a-z0-9-]{0,199})\$episode\$([1-9]\d{0,5})$/i);
   if (!match) return null;
+  // Bound the whole extraction, including response bodies and slow mirrors.
+  const signal = AbortSignal.timeout(30000);
+  const fetch = (url: string, options: RequestInit = {}) => globalThis.fetch(url, { ...options, signal });
 
   const slug = match[1];
   const episodeNumber = Number(match[2]);
@@ -134,7 +137,12 @@ export const fetchCurrentAniKotoSources = async (
         const embedId = extractEmbedId(await embedResponse.text());
         if (!embedId) continue;
 
-        const embedOrigin = new URL(embedUrl).origin;
+        const embedLocation = new URL(embedUrl);
+        const embedOrigin = embedLocation.origin;
+        // MegaPlay's client forwards this selector to getSources; dropping it
+        // makes alternate server buttons resolve to the default CDN instead.
+        const mirror = (embedLocation.searchParams.get('s') || '').replace(/[^a-z0-9_-]/gi, '');
+        const mirrorQuery = mirror ? `&s=${encodeURIComponent(mirror)}` : '';
         const sourceUrls = [
           `${embedOrigin}/stream/getSourcesNew?id=${encodeURIComponent(embedId)}&id=${encodeURIComponent(embedId)}`,
           `${embedOrigin}/stream/getSources?id=${encodeURIComponent(embedId)}`,
@@ -147,9 +155,10 @@ export const fetchCurrentAniKotoSources = async (
         let sourceJson: any = null;
         for (const sourceUrl of sourceUrls) {
           const sourceOrigin = new URL(sourceUrl).origin;
-          const sourceResponse = await fetch(sourceUrl, {
+          const sourceResponse = await fetch(sourceUrl + mirrorQuery, {
             headers: { ...ajaxHeaders(), Origin: sourceOrigin, Referer: embedUrl },
           });
+          if (!sourceResponse.ok) continue;
           const candidate = await parseJson(sourceResponse);
           if (candidate?.sources?.file || candidate?.sources?.url || candidate?.source || candidate?.url) {
             sourceJson = candidate;
