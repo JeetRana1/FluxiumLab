@@ -604,6 +604,8 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       || /^https?:\/\/[^/]*\.(?:mikora\.top|norami\.top|shiora\.(?:top|site))\//i.test(url)
       || /^https?:\/\/cdn\.watching\.onl\//i.test(url)
       || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url)
+      // AniKoto imgnex playlists are fast directly; outbound proxies add seconds per level.
+      || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url)
       || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url);
     const isMorencius = /^https?:\/\/morencius\.com\//i.test(url);
     const isAcekCdn = /^https?:\/\/[^/]*\.acek-cdn\.com\//i.test(url);
@@ -726,7 +728,12 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
             }
 
             if (response.status >= 400) {
-              lastCandidateError = new Error(`Upstream HLS response (${response.status})`);
+              response.data?.destroy?.();
+              lastCandidateError = Object.assign(new Error(`Upstream HLS response (${response.status})`), {
+                statusCode: response.status,
+              });
+              // Deleted assets must reach the player without proxy/node retry amplification.
+              if (response.status === 404 || response.status === 410) throw lastCandidateError;
               const isThrottled = response.status === 429;
               // A 429 means this specific node is rate-limiting us. Rotate to the
               // next node instead of hammering the throttled one; any node keeps a
@@ -777,7 +784,8 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
           } catch (error) {
             if (isAbortError(error)) throw error;
             lastCandidateError = error;
-            const statusCode = Number((error as any)?.response?.status || 0);
+            const statusCode = Number((error as any)?.statusCode || (error as any)?.response?.status || 0);
+            if (statusCode === 404 || statusCode === 410) throw error;
             const isTransient =
               (statusCode >= 500 && statusCode < 600) || statusCode === 0 || statusCode === 429;
             if (isTransient && attempt < maxAttempts) {
@@ -1140,7 +1148,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       console.error('HLS Proxy error:', error.message);
       const upstreamStatus = Number(error?.statusCode || error?.response?.status || 0);
       const status = upstreamStatus >= 400 && upstreamStatus < 600 ? upstreamStatus : 502;
-      return reply.status(status).send({
+      return reply.header('Cache-Control', 'no-store').status(status).send({
         error: 'Proxy failed',
         ...(upstreamStatus ? { upstreamStatus } : {}),
       });

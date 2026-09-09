@@ -470,7 +470,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const nodeVariants = hubstreamNodeVariants(url);
     const isHubstreamCdn = nodeVariants.length > 1 && /\/v4\//i.test(url);
     const orderedHubstreamVariants = isHubstreamCdn ? orderHubstreamVariants(nodeVariants) : nodeVariants;
-    const isShioraCdn = /^https?:\/\/(?:megap|vidtub)\.(?:shiora\.(?:top|site)|norami\.top|akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.(?:mikora\.top|norami\.top|shiora\.(?:top|site))\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url);
+    const isShioraCdn = /^https?:\/\/(?:megap|vidtub)\.(?:shiora\.(?:top|site)|norami\.top|akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.(?:mikora\.top|norami\.top|shiora\.(?:top|site))\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url);
     const isMorencius = /^https?:\/\/morencius\.com\//i.test(url);
     const isAcekCdn = /^https?:\/\/[^/]*\.acek-cdn\.com\//i.test(url);
     const proxyCandidates = isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius ? [""] : isAcekCdn ? ["", ...(0, import_outboundProxy.getProxyCandidatesSync)()] : [...(0, import_outboundProxy.getProxyCandidatesSync)(), ""];
@@ -548,7 +548,12 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
               response.data = decodeNumericHlsManifest(response.data);
             }
             if (response.status >= 400) {
-              lastCandidateError = new Error(`Upstream HLS response (${response.status})`);
+              response.data?.destroy?.();
+              lastCandidateError = Object.assign(new Error(`Upstream HLS response (${response.status})`), {
+                statusCode: response.status
+              });
+              if (response.status === 404 || response.status === 410)
+                throw lastCandidateError;
               const isThrottled = response.status === 429;
               if (isThrottled && nodeVariants.length > 1)
                 break;
@@ -581,7 +586,9 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
             if (isAbortError(error))
               throw error;
             lastCandidateError = error;
-            const statusCode = Number(error?.response?.status || 0);
+            const statusCode = Number(error?.statusCode || error?.response?.status || 0);
+            if (statusCode === 404 || statusCode === 410)
+              throw error;
             const isTransient = statusCode >= 500 && statusCode < 600 || statusCode === 0 || statusCode === 429;
             if (isTransient && attempt < maxAttempts) {
               await sleep(backoffMs);
@@ -862,7 +869,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       console.error("HLS Proxy error:", error.message);
       const upstreamStatus = Number(error?.statusCode || error?.response?.status || 0);
       const status = upstreamStatus >= 400 && upstreamStatus < 600 ? upstreamStatus : 502;
-      return reply.status(status).send({
+      return reply.header("Cache-Control", "no-store").status(status).send({
         error: "Proxy failed",
         ...upstreamStatus ? { upstreamStatus } : {}
       });

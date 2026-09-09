@@ -58,6 +58,52 @@ const extractEmbedId = (html) => html.match(/id=["']megaplay-player["'][^>]*data
 const hasSources = (result) => Boolean(
   result?.sub?.sources?.some((source) => String(source?.url || "").trim()) || result?.dub?.sources?.some((source) => String(source?.url || "").trim())
 );
+const discoveryCache = /* @__PURE__ */ new Map();
+const discoveryPending = /* @__PURE__ */ new Map();
+const discoverEpisodes = async (slug) => {
+  const pending = discoveryPending.get(slug);
+  if (pending)
+    return pending;
+  const request = (async () => {
+    const signal = AbortSignal.timeout(12e3);
+    const watchResponse = await globalThis.fetch(`${BASE_URL}/watch/${encodeURIComponent(slug)}`, {
+      headers: pageHeaders(),
+      signal
+    });
+    if (!watchResponse.ok)
+      return /* @__PURE__ */ new Map();
+    const animeId = cheerio.load(await watchResponse.text())("#watch-main").attr("data-id") || "";
+    if (!animeId)
+      return /* @__PURE__ */ new Map();
+    const response = await globalThis.fetch(`${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`, {
+      headers: ajaxHeaders(),
+      signal
+    });
+    if (!response.ok)
+      return /* @__PURE__ */ new Map();
+    const json = await parseJson(response);
+    const $ = cheerio.load(String(json?.result || json?.html || ""));
+    const episodes = /* @__PURE__ */ new Map();
+    $("a[data-num]").each((_, element) => {
+      const row = $(element);
+      const number = Number(row.attr("data-num"));
+      const ids = row.attr("data-ids") || row.attr("data-id") || "";
+      if (Number.isInteger(number) && number > 0 && ids && !episodes.has(number))
+        episodes.set(number, ids);
+    });
+    if (episodes.size) {
+      for (const [key, value] of discoveryCache)
+        if (value.expires <= Date.now())
+          discoveryCache.delete(key);
+      if (discoveryCache.size >= 128)
+        discoveryCache.delete(discoveryCache.keys().next().value);
+      discoveryCache.set(slug, { expires: Date.now() + 30 * 60 * 1e3, episodes });
+    }
+    return episodes;
+  })().finally(() => discoveryPending.delete(slug));
+  discoveryPending.set(slug, request);
+  return request;
+};
 const fetchCurrentAniKotoSources = async (episodeId, server) => {
   const match = episodeId.match(/^([a-z0-9][a-z0-9-]{0,199})\$episode\$([1-9]\d{0,5})$/i);
   if (!match)
@@ -66,24 +112,8 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
   const fetch = (url, options = {}) => globalThis.fetch(url, { ...options, signal });
   const slug = match[1];
   const episodeNumber = Number(match[2]);
-  const watchResponse = await fetch(`${BASE_URL}/watch/${encodeURIComponent(slug)}`, {
-    headers: pageHeaders()
-  });
-  if (!watchResponse.ok)
-    return null;
-  const watchHtml = await watchResponse.text();
-  const animeId = cheerio.load(watchHtml)("#watch-main").attr("data-id") || "";
-  if (!animeId)
-    return null;
-  const episodeResponse = await fetch(
-    `${BASE_URL}/ajax/episode/list/${encodeURIComponent(animeId)}`,
-    { headers: ajaxHeaders() }
-  );
-  const episodeJson = await parseJson(episodeResponse);
-  const episodeHtml = String(episodeJson?.result || episodeJson?.html || "");
-  const $episodes = cheerio.load(episodeHtml);
-  const episode = $episodes(`a[data-num="${episodeNumber}"]`).first();
-  const episodeIds = episode.attr("data-ids") || episode.attr("data-id") || "";
+  const cached = discoveryCache.get(slug);
+  const episodeIds = (cached && cached.expires > Date.now() ? cached.episodes.get(episodeNumber) : "") || (await discoverEpisodes(slug)).get(episodeNumber);
   if (!episodeIds)
     return null;
   const serverResponse = await fetch(
@@ -178,9 +208,19 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
         ).trim();
         if (!file)
           continue;
+        const skips = {};
+        for (const type of ["intro", "outro"]) {
+          const segment = sourceJson?.[type] ?? linkJson?.result?.skip_data?.[type];
+          const start = Array.isArray(segment) ? segment[0] : segment?.start;
+          const end = Array.isArray(segment) ? segment[1] : segment?.end;
+          if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end > start) {
+            skips[type] = { start, end };
+          }
+        }
         const payload = group.type === "dub" ? result.dub ||= { sources: [], subtitles: [] } : result.sub ||= { sources: [], subtitles: [] };
-        if (!payload.sources.some((source) => source.url === file)) {
+        if (!payload.sources.some((source) => source.url === file && JSON.stringify({ intro: source.intro, outro: source.outro }) === JSON.stringify(skips))) {
           payload.sources.push({
+            ...skips,
             url: file,
             isM3U8: /\.m3u8(?:[?#]|$)/i.test(file),
             quality: "auto",
