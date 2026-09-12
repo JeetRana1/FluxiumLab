@@ -6,6 +6,23 @@ const path = require('node:path');
 const { transformSync } = require('esbuild');
 const Fastify = require('fastify');
 
+test('encrypted MegaPlay responses retain subtitles and timings; malformed envelopes are ignored', () => {
+  const module = { exports: {} };
+  vm.runInNewContext(transformSync(fs.readFileSync(path.join(__dirname, '../src/providers/custom/anikotoProvider.ts'), 'utf8'), { loader: 'ts', format: 'cjs' }).code,
+    { module, exports: module.exports, require, Buffer });
+  const decode = module.exports.decodeAniKotoSourceResponse;
+  const enc = 'wdeBruh3qqn_i5wUNnyaPcXqidp1UWP84FfPHzGyKXCJBhAWuEiHR0hChNQM0wmZ_WRn_pUAgif1NXV9FxvRL9tHJUZ5-8nZnH1C0aScaGqs978NXUJ9C6_HoE52v-_fHDZrNEbCR5FnbpMkr1yWF5g5ct_qBwXJVFsJa3nTaRc';
+  const payload = { enc, tracks: [{ file: 'https://example.com/sub.vtt' }], intro: { start: 5, end: 90 } };
+  const decoded = decode(payload);
+  assert.match(decoded.sources.file, /^https:\/\/.*\/master\.m3u8$/);
+  assert.equal(decoded.tracks, payload.tracks);
+  assert.equal(decoded.intro, payload.intro);
+  const malformed = { enc: 'broken' };
+  assert.equal(decode(malformed), malformed);
+  const legacy = { sources: { file: 'https://example.com/video.m3u8' } };
+  assert.equal(decode(legacy), legacy);
+});
+
 test('discovery removes two next-episode requests, coalesces, expires and isolates title snapshots', async () => {
   const module = { exports: {} };
   const requests = [];

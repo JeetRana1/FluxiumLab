@@ -1748,6 +1748,26 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
     return null;
   };
 
+  const getRequestedSeason = async (request: FastifyRequest, reply: FastifyReply, id: string) => {
+    const query = request.query as { type?: string; season?: string; details?: string; provider?: string };
+    if (query.type !== 'tv' || query.details !== 'true' || query.season === undefined || query.provider) return false;
+    const season = Number(query.season);
+    if (!/^\d+$/.test(id || '') || !/^\d+$/.test(query.season) || !Number.isSafeInteger(season)) {
+      reply.status(400).send({ message: 'Invalid TMDB show or season number' });
+      return true;
+    }
+    try {
+      const response = await axios.get(`https://api.themoviedb.org/3/tv/${id}/season/${season}`, {
+        params: { api_key: tmdbApi, language: 'en-US' }, timeout: 10000,
+      });
+      // Keep TMDB's episode identity and raw votes, including null/zero values.
+      reply.send({ ...response.data, tmdb_id: String(id) });
+    } catch (_) {
+      reply.status(502).send({ message: 'TMDB season metadata unavailable' });
+    }
+    return true;
+  };
+
   fastify.get('/info', async (request: FastifyRequest, reply: FastifyReply) => {
     const sanitizeType = (t: any): string | undefined => {
       if (!t || t === 'undefined' || t === 'null') return undefined;
@@ -1755,6 +1775,7 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
     };
 
     const id = (request.query as { id: string }).id;
+    if (await getRequestedSeason(request, reply, id)) return;
     let type = sanitizeType((request.query as { type: string }).type);
     const provider = (request.query as { provider?: string }).provider;
     const providerLower = provider?.toLowerCase();
@@ -1974,6 +1995,7 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
     };
 
     const id = (request.params as { id: string }).id;
+    if (await getRequestedSeason(request, reply, id)) return;
     let type = sanitizeType((request.query as { type: string }).type);
     const provider = (request.query as { provider?: string }).provider;
     const providerLower = provider?.toLowerCase();

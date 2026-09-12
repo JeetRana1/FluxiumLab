@@ -567,13 +567,18 @@ export const extractPlaybackWithPlaywright = async (
   };
 
   for (let attempt = 0; attempt < MAX_HUBSTREAM_ATTEMPTS; attempt++) {
+  let context: any;
+  let ownsSlot = false;
+  let notifyManifestReady: () => void = () => {};
+  const manifestReady = new Promise<void>((resolve) => { notifyManifestReady = resolve; });
   try {
     browser = await getSharedBrowser();
     if (!browser) {
       return { sources: [], subtitles: [] };
     }
     await acquireBrowserSlot();
-    const context = await browser.newContext({
+    ownsSlot = true;
+    context = await browser.newContext({
       extraHTTPHeaders: referer ? { Referer: referer } : undefined,
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -713,13 +718,20 @@ export const extractPlaybackWithPlaywright = async (
             contentType,
             expiresAt: Date.now() + HLS_MANIFEST_CACHE_MS,
           });
+          notifyManifestReady();
         }
       } catch {
         // Ignore individual response parse failures.
       }
     });
 
-    await page.goto(normalizedEmbed, { waitUntil: 'domcontentloaded', timeout: attemptTimeout });
+    try {
+      await page.goto(normalizedEmbed, { waitUntil: 'domcontentloaded', timeout: attemptTimeout });
+    } catch (error: any) {
+      // A slow peripheral script can hold DOMContentLoaded after HubStream's
+      // player has already started. Keep inspecting that document on timeout.
+      if (!isHubstreamEmbed || error?.name !== 'TimeoutError') throw error;
+    }
 
     // Trigger player/network activity in common embed pages.
     const triggerPlayerActivity = async () =>
@@ -810,8 +822,34 @@ export const extractPlaybackWithPlaywright = async (
         .catch(() => undefined);
 
     if (!isVidkingEmbed) await triggerPlayerActivity();
-    if (isHubstreamEmbed) await page.waitForTimeout(800).catch(() => undefined);
-    if (isHubstreamEmbed) await triggerPlayerActivity();
+    if (isHubstreamEmbed) {
+      const collectDecodedPayloads = async () => {
+        const payloads = await page.evaluate(() => (window as any).__playbackPayloads || []).catch(() => []);
+        for (const payload of payloads) {
+          for (const parsed of parseUrlsFromText(String(payload || ''))) addDiscovered(parsed);
+          try { addSubtitles(parseSubtitlesFromValue(JSON.parse(String(payload || '')), normalizedEmbed)); }
+          catch { addSubtitles(parseSubtitlesFromText(String(payload || ''))); }
+        }
+      };
+      await collectDecodedPayloads();
+      // Already-decoded sources do not need another activation delay. The
+      // manifest prefetch below still captures their short-lived playlists
+      // in this browser session before it is closed.
+      const activationDeadline = Date.now() + 800;
+      while (!discovered.size && Date.now() < activationDeadline) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([manifestReady, new Promise<void>(resolve => { timer = setTimeout(resolve, 50); })]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+        await collectDecodedPayloads();
+      }
+      if (!discovered.size) await triggerPlayerActivity();
+      // Read decoded sources/tracks before polling. Some HubStream variants
+      // expose their payload without issuing a media request until user play.
+      await collectDecodedPayloads();
+    }
     if (isTpeadEmbed) await page.waitForTimeout(600).catch(() => undefined);
     if (isTpeadEmbed) await triggerPlayerActivity();
 
@@ -1063,11 +1101,13 @@ export const extractPlaybackWithPlaywright = async (
       }
     }));
 
-    await context.close();
   } catch (err) {
     console.error(`[Playwright extractor failed] ${normalizedEmbed}`, err);
   } finally {
-    releaseBrowserSlot();
+    // Failed navigation and response parsing must not leave live player pages
+    // downloading media indefinitely in the shared browser.
+    if (context) await context.close().catch(() => undefined);
+    if (ownsSlot) releaseBrowserSlot();
   }
 
     if (discovered.size > 0 || !isHubstreamEmbed) break;

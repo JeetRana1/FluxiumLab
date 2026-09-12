@@ -1418,6 +1418,26 @@ const routes = async (fastify, options) => {
     }
     return null;
   };
+  const getRequestedSeason = async (request, reply, id) => {
+    const query = request.query;
+    if (query.type !== "tv" || query.details !== "true" || query.season === void 0 || query.provider)
+      return false;
+    const season = Number(query.season);
+    if (!/^\d+$/.test(id || "") || !/^\d+$/.test(query.season) || !Number.isSafeInteger(season)) {
+      reply.status(400).send({ message: "Invalid TMDB show or season number" });
+      return true;
+    }
+    try {
+      const response = await import_axios.default.get(`https://api.themoviedb.org/3/tv/${id}/season/${season}`, {
+        params: { api_key: import_main.tmdbApi, language: "en-US" },
+        timeout: 1e4
+      });
+      reply.send({ ...response.data, tmdb_id: String(id) });
+    } catch (_) {
+      reply.status(502).send({ message: "TMDB season metadata unavailable" });
+    }
+    return true;
+  };
   fastify.get("/info", async (request, reply) => {
     const sanitizeType = (t) => {
       if (!t || t === "undefined" || t === "null")
@@ -1425,6 +1445,8 @@ const routes = async (fastify, options) => {
       return String(t).toLowerCase();
     };
     const id = request.query.id;
+    if (await getRequestedSeason(request, reply, id))
+      return;
     let type = sanitizeType(request.query.type);
     const provider = request.query.provider;
     const providerLower = provider?.toLowerCase();
@@ -1602,6 +1624,8 @@ const routes = async (fastify, options) => {
       return String(t).toLowerCase();
     };
     const id = request.params.id;
+    if (await getRequestedSeason(request, reply, id))
+      return;
     let type = sanitizeType(request.query.type);
     const provider = request.query.provider;
     const providerLower = provider?.toLowerCase();

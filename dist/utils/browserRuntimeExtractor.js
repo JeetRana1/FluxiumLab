@@ -544,13 +544,21 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
       subtitleInfoUrls.add(url);
   };
   for (let attempt = 0; attempt < MAX_HUBSTREAM_ATTEMPTS; attempt++) {
+    let context;
+    let ownsSlot = false;
+    let notifyManifestReady = () => {
+    };
+    const manifestReady = new Promise((resolve) => {
+      notifyManifestReady = resolve;
+    });
     try {
       browser = await getSharedBrowser();
       if (!browser) {
         return { sources: [], subtitles: [] };
       }
       await acquireBrowserSlot();
-      const context = await browser.newContext({
+      ownsSlot = true;
+      context = await browser.newContext({
         extraHTTPHeaders: referer ? { Referer: referer } : void 0,
         userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
       });
@@ -670,11 +678,17 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
               contentType,
               expiresAt: Date.now() + HLS_MANIFEST_CACHE_MS
             });
+            notifyManifestReady();
           }
         } catch {
         }
       });
-      await page.goto(normalizedEmbed, { waitUntil: "domcontentloaded", timeout: attemptTimeout });
+      try {
+        await page.goto(normalizedEmbed, { waitUntil: "domcontentloaded", timeout: attemptTimeout });
+      } catch (error) {
+        if (!isHubstreamEmbed || error?.name !== "TimeoutError")
+          throw error;
+      }
       const triggerPlayerActivity = async () => page.evaluate(() => {
         const trigger = (el) => {
           if (!el)
@@ -751,10 +765,37 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
       }).catch(() => void 0);
       if (!isVidkingEmbed)
         await triggerPlayerActivity();
-      if (isHubstreamEmbed)
-        await page.waitForTimeout(800).catch(() => void 0);
-      if (isHubstreamEmbed)
-        await triggerPlayerActivity();
+      if (isHubstreamEmbed) {
+        const collectDecodedPayloads = async () => {
+          const payloads = await page.evaluate(() => window.__playbackPayloads || []).catch(() => []);
+          for (const payload of payloads) {
+            for (const parsed of parseUrlsFromText(String(payload || "")))
+              addDiscovered(parsed);
+            try {
+              addSubtitles(parseSubtitlesFromValue(JSON.parse(String(payload || "")), normalizedEmbed));
+            } catch {
+              addSubtitles(parseSubtitlesFromText(String(payload || "")));
+            }
+          }
+        };
+        await collectDecodedPayloads();
+        const activationDeadline = Date.now() + 800;
+        while (!discovered.size && Date.now() < activationDeadline) {
+          let timer;
+          try {
+            await Promise.race([manifestReady, new Promise((resolve) => {
+              timer = setTimeout(resolve, 50);
+            })]);
+          } finally {
+            if (timer)
+              clearTimeout(timer);
+          }
+          await collectDecodedPayloads();
+        }
+        if (!discovered.size)
+          await triggerPlayerActivity();
+        await collectDecodedPayloads();
+      }
       if (isTpeadEmbed)
         await page.waitForTimeout(600).catch(() => void 0);
       if (isTpeadEmbed)
@@ -959,11 +1000,13 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
         } catch {
         }
       }));
-      await context.close();
     } catch (err) {
       console.error(`[Playwright extractor failed] ${normalizedEmbed}`, err);
     } finally {
-      releaseBrowserSlot();
+      if (context)
+        await context.close().catch(() => void 0);
+      if (ownsSlot)
+        releaseBrowserSlot();
     }
     if (discovered.size > 0 || !isHubstreamEmbed)
       break;

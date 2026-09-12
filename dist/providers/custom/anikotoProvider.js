@@ -28,10 +28,31 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var anikotoProvider_exports = {};
 __export(anikotoProvider_exports, {
+  decodeAniKotoSourceResponse: () => decodeAniKotoSourceResponse,
   fetchCurrentAniKotoSources: () => fetchCurrentAniKotoSources
 });
 module.exports = __toCommonJS(anikotoProvider_exports);
 var cheerio = __toESM(require("cheerio"));
+var import_crypto = require("crypto");
+const decodeAniKotoSourceResponse = (payload) => {
+  if (!payload || typeof payload.enc !== "string")
+    return payload;
+  try {
+    const key = Buffer.alloc(32);
+    key.write("i?LMTAx0Q6,:}50U");
+    const decipher = (0, import_crypto.createDecipheriv)("aes-256-cbc", key, Buffer.from("W0;27ToaUpl_P%'c"));
+    const decoded = JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(payload.enc, "base64url")),
+      decipher.final()
+    ]).toString("utf8"));
+    const file = decoded?.file || decoded?.url;
+    if (typeof file !== "string" || !/^https?:\/\//i.test(file))
+      return payload;
+    return { ...payload, sources: { file } };
+  } catch {
+    return payload;
+  }
+};
 const BASE_URL = "https://anikoto.cz";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const pageHeaders = () => ({
@@ -197,7 +218,7 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
           });
           if (!sourceResponse.ok)
             continue;
-          const candidate = await parseJson(sourceResponse);
+          const candidate = decodeAniKotoSourceResponse(await parseJson(sourceResponse));
           if (candidate?.sources?.file || candidate?.sources?.url || candidate?.source || candidate?.url) {
             sourceJson = candidate;
             break;
@@ -243,5 +264,6 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
 };
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  decodeAniKotoSourceResponse,
   fetchCurrentAniKotoSources
 });

@@ -1,4 +1,23 @@
 import * as cheerio from 'cheerio';
+import { createDecipheriv } from 'crypto';
+
+// MegaPlay's public client uses a zero-padded 32-byte key for its URL envelope.
+export const decodeAniKotoSourceResponse = (payload: any): any => {
+  if (!payload || typeof payload.enc !== 'string') return payload;
+  try {
+    const key = Buffer.alloc(32);
+    key.write('i?LMTAx0Q6,:}50U');
+    const decipher = createDecipheriv('aes-256-cbc', key, Buffer.from("W0;27ToaUpl_P%'c"));
+    const decoded = JSON.parse(Buffer.concat([
+      decipher.update(Buffer.from(payload.enc, 'base64url')), decipher.final(),
+    ]).toString('utf8'));
+    const file = decoded?.file || decoded?.url;
+    if (typeof file !== 'string' || !/^https?:\/\//i.test(file)) return payload;
+    return { ...payload, sources: { file } };
+  } catch {
+    return payload;
+  }
+};
 
 const BASE_URL = 'https://anikoto.cz';
 const USER_AGENT =
@@ -184,7 +203,7 @@ export const fetchCurrentAniKotoSources = async (
             headers: { ...ajaxHeaders(), Origin: sourceOrigin, Referer: embedUrl },
           });
           if (!sourceResponse.ok) continue;
-          const candidate = await parseJson(sourceResponse);
+          const candidate = decodeAniKotoSourceResponse(await parseJson(sourceResponse));
           if (candidate?.sources?.file || candidate?.sources?.url || candidate?.source || candidate?.url) {
             sourceJson = candidate;
             break;
