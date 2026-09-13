@@ -335,18 +335,18 @@ const resolveMovieProvider = (provider) => {
 const HDSTREAM_TV_EPISODE_SHIFTS = {
   "262838": { 2: { shiftFrom: 6, shift: 1 } }
 };
-const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode) => {
+const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode, titleInfo) => {
   const requestedSeason = Number(season || 1);
   const requestedEpisode = Number(episode || 1);
   const episodeShift = HDSTREAM_TV_EPISODE_SHIFTS[String(id || "").trim()]?.[requestedSeason];
   const shiftedEpisode = episodeShift && requestedEpisode >= episodeShift.shiftFrom ? requestedEpisode + episodeShift.shift : requestedEpisode;
   let targetId = String(id || "").trim();
   try {
-    const tmdbInfoRes = await request.server.inject({
+    const tmdbInfoRes = titleInfo ? null : await request.server.inject({
       method: "GET",
       url: `/meta/tmdb/info/${encodeURIComponent(targetId)}?type=${encodeURIComponent(type || "tv")}`
     });
-    const tmdbInfo = safeJsonParse(tmdbInfoRes.body || "{}");
+    const tmdbInfo = titleInfo || safeJsonParse(tmdbInfoRes?.body || "{}");
     const titleCandidates = getTitleCandidatesFromMedia(tmdbInfo);
     const preferredYear = Number(
       String(tmdbInfo?.releaseDate || tmdbInfo?.first_air_date || "").slice(0, 4)
@@ -2107,13 +2107,29 @@ const routes = async (fastify, options) => {
           String(id || ""),
           String(type || "tv"),
           Number(request.query.season || 1),
-          Number(request.query.episode || 1)
+          Number(request.query.episode || 1),
+          await getDirectTmdbInfo(String(id), "tv")
         ) || episodeId;
       } catch {
       }
     }
+    const directHdstreamTvAttempt = providerLower === "hdstream4u" && type === "tv" && /^https?:\/\//i.test(String(episodeId || ""));
+    if (directHdstreamTvAttempt) {
+      try {
+        const delegated = await request.server.inject({
+          method: "GET",
+          url: `/movies/hdstream4u/watch?episodeId=${encodeURIComponent(episodeId)}`
+        });
+        if (delegated.statusCode < 400) {
+          const payload = safeJsonParse(delegated.body || "{}");
+          if (payload?.sources?.length)
+            return reply.status(200).send(payload);
+        }
+      } catch {
+      }
+    }
     let discoveredMovieOrTvInfo = null;
-    if ((type === "movie" || type === "tv") && (!providerLower || providerLower === "hdstream4u") && id) {
+    if ((type === "movie" || type === "tv") && (!providerLower || providerLower === "hdstream4u") && !directHdstreamTvAttempt && id) {
       try {
         const discoveryTmdb = new import_extensions.META.TMDB(
           import_main.tmdbApi,

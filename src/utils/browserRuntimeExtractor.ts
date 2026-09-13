@@ -726,7 +726,10 @@ export const extractPlaybackWithPlaywright = async (
     });
 
     try {
-      await page.goto(normalizedEmbed, { waitUntil: 'domcontentloaded', timeout: attemptTimeout });
+      const navigation = page.goto(normalizedEmbed, { waitUntil: 'domcontentloaded', timeout: attemptTimeout });
+      // A valid manifest is stronger readiness evidence than DOMContentLoaded.
+      // Ad/peripheral scripts can hold that event after the player is ready.
+      await (isHubstreamEmbed ? Promise.race([navigation, manifestReady]) : navigation);
     } catch (error: any) {
       // A slow peripheral script can hold DOMContentLoaded after HubStream's
       // player has already started. Keep inspecting that document on timeout.

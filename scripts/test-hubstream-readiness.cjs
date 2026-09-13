@@ -16,7 +16,8 @@ require('playwright').chromium.launch = async () => ({
           if (mode === 'failed') throw new Error('navigation failed');
           const url = `https://hubstream.art/${mode}/master.m3u8`;
           handlers.request({url: () => url});
-          await handlers.response({url: () => url, headers: () => ({'content-type':'application/vnd.apple.mpegurl'}), text: async () => '#EXTM3U\n#EXT-X-ENDLIST'});
+           await handlers.response({url: () => url, headers: () => ({'content-type':'application/vnd.apple.mpegurl'}), text: async () => '#EXTM3U\n#EXT-X-ENDLIST'});
+           if (mode === 'pending-dom') return new Promise(() => {});
           if (mode === 'timeout') { const e = new Error('slow DOMContentLoaded'); e.name = 'TimeoutError'; throw e; }
         },
         waitForTimeout: async () => { throw new Error('ready source must not poll'); },
@@ -28,7 +29,7 @@ require('playwright').chromium.launch = async () => ({
 });
 const {extractPlaybackWithPlaywright, getCachedHlsManifest} = require('../src/utils/browserRuntimeExtractor');
 test('HubStream returns ready manifests without fixed activation delay and retains sources after DOM timeout', async () => {
-  for (mode of ['ready','timeout']) {
+  for (mode of ['ready','timeout','pending-dom']) {
     const started = Date.now();
     const result = await extractPlaybackWithPlaywright(`https://hubstream.art/#${mode}`);
     assert.ok(Date.now()-started < 700, 'ready manifest should bypass 800ms wait');

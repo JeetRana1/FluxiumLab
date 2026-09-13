@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import axios from 'axios';
 import vm from 'vm';
-import { extractPlaybackWithPlaywright, setCachedHlsManifest, acquireSharedBrowser, releaseSharedBrowser } from '../../utils/browserRuntimeExtractor';
+import { extractPlaybackWithPlaywright, getCachedHlsManifest, setCachedHlsManifest, acquireSharedBrowser, releaseSharedBrowser } from '../../utils/browserRuntimeExtractor';
 
 const BASE_URL = 'https://new5.hdhub4u.cl';
 const USER_AGENT =
@@ -366,6 +366,11 @@ const verifyHubstreamSourceState = async (
   url: string,
   timeoutMs = 4000,
 ): Promise<'ok' | 'dead' | 'unknown'> => {
+  // The extractor has just fetched this exact signed URL in its browser
+  // session. Reuse that evidence instead of repeating a cookie-less request.
+  if (!hubstreamTokenIsExpired(url) && getCachedHlsManifest(url)?.body.trim().startsWith('#EXTM3U')) {
+    return 'ok';
+  }
   try {
     const response = await axios.get(url, {
       timeout: timeoutMs,

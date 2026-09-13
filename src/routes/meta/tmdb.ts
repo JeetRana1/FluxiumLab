@@ -397,6 +397,7 @@ const resolveHdstream4uTvEpisodeId = async (
   type: string,
   season?: number,
   episode?: number,
+  titleInfo?: any,
 ): Promise<string> => {
   const requestedSeason = Number(season || 1);
   const requestedEpisode = Number(episode || 1);
@@ -408,11 +409,11 @@ const resolveHdstream4uTvEpisodeId = async (
 
   let targetId = String(id || '').trim();
   try {
-    const tmdbInfoRes = await request.server.inject({
+    const tmdbInfoRes = titleInfo ? null : await request.server.inject({
       method: 'GET',
       url: `/meta/tmdb/info/${encodeURIComponent(targetId)}?type=${encodeURIComponent(type || 'tv')}`,
     });
-    const tmdbInfo = safeJsonParse(tmdbInfoRes.body || '{}');
+    const tmdbInfo = titleInfo || safeJsonParse(tmdbInfoRes?.body || '{}');
     const titleCandidates = getTitleCandidatesFromMedia(tmdbInfo);
     const preferredYear = Number(
       String(tmdbInfo?.releaseDate || tmdbInfo?.first_air_date || '').slice(0, 4),
@@ -2641,9 +2642,29 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
             String(type || 'tv'),
             Number((request.query as { season?: number }).season || 1),
             Number((request.query as { episode?: number }).episode || 1),
+            await getDirectTmdbInfo(String(id), 'tv'),
           )) || episodeId;
       } catch {
         // Ignore mapping failures and continue.
+      }
+    }
+
+    // A resolved HDStream TV link needs no further title discovery, season
+    // hydration or trailer lookup before extraction. Keep the existing fallback
+    // flow if this direct attempt does not return sources.
+    const directHdstreamTvAttempt = providerLower === 'hdstream4u' && type === 'tv' && /^https?:\/\//i.test(String(episodeId || ''));
+    if (directHdstreamTvAttempt) {
+      try {
+        const delegated = await request.server.inject({
+          method: 'GET',
+          url: `/movies/hdstream4u/watch?episodeId=${encodeURIComponent(episodeId)}`,
+        });
+        if (delegated.statusCode < 400) {
+          const payload = safeJsonParse(delegated.body || '{}');
+          if (payload?.sources?.length) return reply.status(200).send(payload);
+        }
+      } catch {
+        // Preserve provider discovery/recovery on extraction failure.
       }
     }
 
@@ -2652,6 +2673,7 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
     if (
       (type === 'movie' || type === 'tv') &&
       (!providerLower || providerLower === 'hdstream4u') &&
+      !directHdstreamTvAttempt &&
       id
     ) {
       try {

@@ -359,6 +359,9 @@ const verifySourcePlayable = async (url, referer, timeoutMs = 4e3) => {
   }
 };
 const verifyHubstreamSourceState = async (url, timeoutMs = 4e3) => {
+  if (!hubstreamTokenIsExpired(url) && (0, import_browserRuntimeExtractor.getCachedHlsManifest)(url)?.body.trim().startsWith("#EXTM3U")) {
+    return "ok";
+  }
   try {
     const response = await import_axios.default.get(url, {
       timeout: timeoutMs,
