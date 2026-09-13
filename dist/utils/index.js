@@ -522,6 +522,15 @@ const routes = async (fastify, options) => {
           const isHianimeCdn = /(^|\.)(rainveil\d*|megacloud\d*|rapid-cloud\d*|rabbitstream\d*|vizcloud\d*|cloud9|bunnycdn|vidcloud)\.(xyz|tv|ru|net|gg|co|online|pro|ac|cc|bz|li|to)$/i.test(
             target.hostname
           );
+          const isAniKotoMegaplaySubtitle = /(^|\.)(nexabloom|shiora|mikora|imgnex|mewstream)\.(top|site|club|net)$/i.test(
+            target.hostname
+          ) && /(\/subtitles\/|\.(vtt|srt|ass|ssa)(\?|$))/i.test(target.pathname);
+          if (isAniKotoMegaplaySubtitle) {
+            if (!/megaplay\.buzz/i.test(refererForRequest2))
+              refererForRequest2 = "https://megaplay.buzz/";
+            if (!/megaplay\.buzz/i.test(originForRequest))
+              originForRequest = "https://megaplay.buzz";
+          }
           if (isAnimesaltCdn) {
             if (refererForRequest2.includes("animesalt.")) {
               refererForRequest2 = refererForRequest2.replace(
@@ -920,6 +929,9 @@ const routes = async (fastify, options) => {
       target.hostname
     );
     const isKryntalSubtitleHost = /(^|\.)kryntal\.top$/i.test(target.hostname);
+    const isAniKotoMegaplaySubtitleHost = /(^|\.)(nexabloom|shiora|mikora|imgnex|mewstream)\.(top|site|club|net)$/i.test(
+      target.hostname
+    ) && /(\/subtitles\/|\.(vtt|srt|ass|ssa)(\?|$))/i.test(target.pathname);
     const refererCandidates = (() => {
       const values = [
         refererForRequest,
@@ -928,7 +940,8 @@ const routes = async (fastify, options) => {
         isAnimeSaltSubtitleHost ? `${target.protocol}//${target.host}/` : "",
         // AniKoto's kryntal hosts reject the AniKoto/stream referer and only
         // serve subtitle VTTs with the Megaplay origin as Referer.
-        isKryntalSubtitleHost ? "https://megaplay.buzz/" : ""
+        isKryntalSubtitleHost ? "https://megaplay.buzz/" : "",
+        isAniKotoMegaplaySubtitleHost ? "https://megaplay.buzz/" : ""
       ].filter(Boolean);
       return [...new Set(values)];
     })();

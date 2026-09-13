@@ -86,7 +86,7 @@ test('AniKoto extraction preserves language IDs and alternate CDN selectors', as
       return Response.json({ result: { url: `https://megaplay.buzz/embed/${mode}${alt ? '?s=tcdn' : ''}` } });
     }
     if (u.pathname.startsWith('/embed/')) return new Response(`<div id="megaplay-player" data-id="${u.pathname.endsWith('dub') ? '20' : '10'}"></div>`);
-    if (u.pathname.includes('/getSources')) return Response.json({ sources: { file: `https://cdn.example/${u.searchParams.get('id')}/${u.searchParams.get('s') || 'default'}.m3u8` } });
+    if (u.pathname.includes('/getSources')) return Response.json({ sources: { file: `https://cdn.example/${u.searchParams.get('id')}/${u.searchParams.get('s') || 'default'}.m3u8` }, tracks: [{ file: 'https://cdn.example/subtitles/eng-2.vtt', label: 'English' }] });
     throw new Error('Unexpected URL: ' + url);
   };
   vm.runInNewContext(transformSync(source, { loader: 'ts', format: 'cjs' }).code, {
@@ -98,6 +98,10 @@ test('AniKoto extraction preserves language IDs and alternate CDN selectors', as
     assert.ok(result[mode].sources.every(s => s.url.includes('/' + id + '/') && s.isDub === (mode === 'dub')));
     assert.ok(result[mode].sources.some(s => s.url.endsWith('/tcdn.m3u8')));
     assert.ok(result[mode].sources.some(s => s.url.endsWith('/default.m3u8')));
+    assert.equal(result[mode].subtitles.length, 1);
+    // MegaPlay's CDN serves subtitle VTTs with the embed origin root referer.
+    assert.equal(result[mode].subtitles[0].referer, 'https://megaplay.buzz/');
+    assert.equal(result[mode].subtitles[0].url, 'https://cdn.example/subtitles/eng-2.vtt');
   }
   assert.equal(requests.filter(u => u.pathname.includes('/getSources') && u.searchParams.get('s') === 'tcdn').length, 2);
 });

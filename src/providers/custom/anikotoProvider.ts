@@ -242,7 +242,13 @@ export const fetchCurrentAniKotoSources = async (
         }
         for (const track of Array.isArray(sourceJson?.tracks) ? sourceJson.tracks : []) {
           if (track?.file && track.kind !== 'thumbnails' && !payload.subtitles.some((sub: any) => sub.url === track.file)) {
-            payload.subtitles.push({ url: track.file, lang: track.label || 'English' });
+            // MegaPlay's CDN rejects the AniKoto page referer for subtitle VTTs
+            // and only serves them with the embed origin root as Referer.
+            payload.subtitles.push({
+              url: track.file,
+              lang: track.label || 'English',
+              referer: `${embedOrigin}/`,
+            });
           }
         }
       } catch {

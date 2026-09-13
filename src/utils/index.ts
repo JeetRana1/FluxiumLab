@@ -549,6 +549,17 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
               target.hostname,
             );
 
+          // MegaPlay subtitle CDNs reject the AniKoto page referer for VTT/SRT
+          // files and only serve them with the embed origin root as Referer.
+          const isAniKotoMegaplaySubtitle =
+            /(^|\.)(nexabloom|shiora|mikora|imgnex|mewstream)\.(top|site|club|net)$/i.test(
+              target.hostname,
+            ) && /(\/subtitles\/|\.(vtt|srt|ass|ssa)(\?|$))/i.test(target.pathname);
+          if (isAniKotoMegaplaySubtitle) {
+            if (!/megaplay\.buzz/i.test(refererForRequest)) refererForRequest = 'https://megaplay.buzz/';
+            if (!/megaplay\.buzz/i.test(originForRequest)) originForRequest = 'https://megaplay.buzz';
+          }
+
           if (isAnimesaltCdn) {
             if (refererForRequest.includes('animesalt.')) {
               refererForRequest = refererForRequest.replace(
@@ -1033,6 +1044,10 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
         target.hostname,
       );
     const isKryntalSubtitleHost = /(^|\.)kryntal\.top$/i.test(target.hostname);
+    const isAniKotoMegaplaySubtitleHost =
+      /(^|\.)(nexabloom|shiora|mikora|imgnex|mewstream)\.(top|site|club|net)$/i.test(
+        target.hostname,
+      ) && /(\/subtitles\/|\.(vtt|srt|ass|ssa)(\?|$))/i.test(target.pathname);
     const refererCandidates = (() => {
       const values = [
         refererForRequest,
@@ -1042,6 +1057,7 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
         // AniKoto's kryntal hosts reject the AniKoto/stream referer and only
         // serve subtitle VTTs with the Megaplay origin as Referer.
         isKryntalSubtitleHost ? 'https://megaplay.buzz/' : '',
+        isAniKotoMegaplaySubtitleHost ? 'https://megaplay.buzz/' : '',
       ].filter(Boolean);
       return [...new Set(values)];
     })();
