@@ -57,6 +57,12 @@ require("dotenv").config();
 import_axios.default.defaults.httpsAgent = new import_https.default.Agent({ family: 4, keepAlive: true });
 import_axios.default.defaults.headers.common["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 import_axios.default.defaults.headers.common["Accept"] = "application/json, text/plain, */*";
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason instanceof Error ? reason.stack || reason.message : reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("[uncaughtException]", error?.stack || error);
+});
 const hlsHttpAgent = new import_http.default.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 64 });
 const hlsHttpsAgent = new import_https.default.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 64, family: 4 });
 const hlsHttpsFreshAgent = new import_https.default.Agent({ family: 4, keepAlive: false });

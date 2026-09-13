@@ -685,6 +685,8 @@ const extractPlaybackWithPlaywright = async (embedUrl, referer, timeoutMs = 12e3
       });
       try {
         const navigation = page.goto(normalizedEmbed, { waitUntil: "domcontentloaded", timeout: attemptTimeout });
+        navigation.catch(() => {
+        });
         await (isHubstreamEmbed ? Promise.race([navigation, manifestReady]) : navigation);
       } catch (error) {
         if (!isHubstreamEmbed || error?.name !== "TimeoutError")

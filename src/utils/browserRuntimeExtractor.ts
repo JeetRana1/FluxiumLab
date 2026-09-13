@@ -726,9 +726,13 @@ export const extractPlaybackWithPlaywright = async (
     });
 
     try {
-      const navigation = page.goto(normalizedEmbed, { waitUntil: 'domcontentloaded', timeout: attemptTimeout });
+const navigation = page.goto(normalizedEmbed, { waitUntil: 'domcontentloaded', timeout: attemptTimeout });
       // A valid manifest is stronger readiness evidence than DOMContentLoaded.
       // Ad/peripheral scripts can hold that event after the player is ready.
+      // When the manifest resolves first the nav promise is no longer awaited, so
+      // swallow its eventual rejection (timeout or browser close) instead of
+      // letting an unhandled promise rejection take down the whole process.
+      navigation.catch(() => {});
       await (isHubstreamEmbed ? Promise.race([navigation, manifestReady]) : navigation);
     } catch (error: any) {
       // A slow peripheral script can hold DOMContentLoaded after HubStream's

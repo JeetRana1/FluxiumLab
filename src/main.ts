@@ -14,6 +14,16 @@ axios.defaults.headers.common['User-Agent'] =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 axios.defaults.headers.common['Accept'] = 'application/json, text/plain, */*';
 
+// A background promise (e.g. an un-awaited page navigation) rejecting must not
+// tear down the shared server. Log it and keep serving; pm2 restarts otherwise
+// kill in-flight requests, leaving clients hanging.
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? reason.stack || reason.message : reason);
+});
+process.on('uncaughtException', (error: any) => {
+  console.error('[uncaughtException]', error?.stack || error);
+});
+
 // Dedicated keep-alive agents for HLS segment streaming
 const hlsHttpAgent = new http.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 64 });
 const hlsHttpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 64, family: 4 });
