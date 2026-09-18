@@ -614,10 +614,13 @@ const extractEpisodeWatchEntries = (
     const candidates = [...block.matchAll(/https:\/\/(?:hdstream4u(?:\.com|\.in)\/file\/[A-Za-z0-9_-]+|morencius\.com\/file\/[A-Za-z0-9_-]+|watchhd\.upns\.live\/#[A-Za-z0-9_-]+|hubstream\.art\/#[A-Za-z0-9_-]+|greenmountmotors\.com\/\?id=[^"'\s<>]+|callistanise\.com\/file\/[A-Za-z0-9_-]+|gadgetsweb\.xyz\/\?id=[^"'\s<>]+|hubcdn\.sbs\/file\/[A-Za-z0-9_-]+)/gi)]
       .map((row) => String(row[0] || '').trim())
       .filter(Boolean);
+    // Prefer the current direct HDStream/Morencius file. HDHub often leaves an
+    // older HubStream link in the same episode block after a new upload lands;
+    // choosing HubStream first makes the episode appear stuck on stale content.
     const preferred =
-      candidates.find((url) => /hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(url)) ||
-      candidates.find((url) => /watchhd\.upns\.live\/#/i.test(url)) ||
       candidates.find((url) => /(?:hdstream4u|morencius)\.com\/(?:file|embed)\//i.test(url)) ||
+      candidates.find((url) => /watchhd\.upns\.live\/#/i.test(url)) ||
+      candidates.find((url) => /hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(url)) ||
       candidates.find((url) => /greenmountmotors\.com\/\?id=/i.test(url)) ||
       candidates.find((url) => /gadgetsweb\.xyz\/\?id=/i.test(url)) ||
       candidates[0];
@@ -1532,6 +1535,16 @@ export class HdStream4uProvider {
         fileCode: href.split('/').pop() || '',
       }));
 
+      // HDHub can expose the same file twice: once as a numbered episode and
+      // once as Bonus EP 1. Keep the numbered-season row authoritative so a
+      // normal TMDB episode can never resolve through the bonus duplicate.
+      const numberedEpisodeIds = new Set(
+        episodes.map((episode) => String(episode?.id || '').trim().toLowerCase()).filter(Boolean),
+      );
+      const uniqueBonusEpisodes = bonusEpisodes.filter((episode) =>
+        !numberedEpisodeIds.has(String(episode?.id || '').trim().toLowerCase()),
+      );
+
       if (episodes.some((e) => /hubstream\.art\/#[A-Za-z0-9_-]+$/.test(e.url) || /morencius\.com\/file\/[A-Za-z0-9_-]+$/.test(e.url))) {
         const betterFromPage: string[] = [];
         if (betterFromPage.length) {
@@ -1560,8 +1573,8 @@ export class HdStream4uProvider {
             : 'movie',
         releaseDate: String(tmdbInfo?.release_date || tmdbInfo?.first_air_date || extractYear(rawTitle) || ''),
         servers,
-        episodes: episodes.length || bonusEpisodes.length
-          ? [...episodes, ...bonusEpisodes].map((episode) => ({
+        episodes: episodes.length || uniqueBonusEpisodes.length
+          ? [...episodes, ...uniqueBonusEpisodes].map((episode) => ({
               episodeId: episode.id,
               title: episode.title,
               episodeNumber: episode.number,

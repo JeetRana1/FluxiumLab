@@ -579,7 +579,7 @@ const extractEpisodeWatchEntries = (html) => {
     if (!Number.isFinite(episodeNo) || episodeNo <= 0)
       continue;
     const candidates = [...block.matchAll(/https:\/\/(?:hdstream4u(?:\.com|\.in)\/file\/[A-Za-z0-9_-]+|morencius\.com\/file\/[A-Za-z0-9_-]+|watchhd\.upns\.live\/#[A-Za-z0-9_-]+|hubstream\.art\/#[A-Za-z0-9_-]+|greenmountmotors\.com\/\?id=[^"'\s<>]+|callistanise\.com\/file\/[A-Za-z0-9_-]+|gadgetsweb\.xyz\/\?id=[^"'\s<>]+|hubcdn\.sbs\/file\/[A-Za-z0-9_-]+)/gi)].map((row) => String(row[0] || "").trim()).filter(Boolean);
-    const preferred = candidates.find((url) => /hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(url)) || candidates.find((url) => /watchhd\.upns\.live\/#/i.test(url)) || candidates.find((url) => /(?:hdstream4u|morencius)\.com\/(?:file|embed)\//i.test(url)) || candidates.find((url) => /greenmountmotors\.com\/\?id=/i.test(url)) || candidates.find((url) => /gadgetsweb\.xyz\/\?id=/i.test(url)) || candidates[0];
+    const preferred = candidates.find((url) => /(?:hdstream4u|morencius)\.com\/(?:file|embed)\//i.test(url)) || candidates.find((url) => /watchhd\.upns\.live\/#/i.test(url)) || candidates.find((url) => /hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(url)) || candidates.find((url) => /greenmountmotors\.com\/\?id=/i.test(url)) || candidates.find((url) => /gadgetsweb\.xyz\/\?id=/i.test(url)) || candidates[0];
     if (!preferred)
       continue;
     entries.push({
@@ -1380,6 +1380,12 @@ class HdStream4uProvider {
         url: href,
         fileCode: href.split("/").pop() || ""
       }));
+      const numberedEpisodeIds = new Set(
+        episodes.map((episode) => String(episode?.id || "").trim().toLowerCase()).filter(Boolean)
+      );
+      const uniqueBonusEpisodes = bonusEpisodes.filter(
+        (episode) => !numberedEpisodeIds.has(String(episode?.id || "").trim().toLowerCase())
+      );
       if (episodes.some((e) => /hubstream\.art\/#[A-Za-z0-9_-]+$/.test(e.url) || /morencius\.com\/file\/[A-Za-z0-9_-]+$/.test(e.url))) {
         const betterFromPage = [];
         if (betterFromPage.length) {
@@ -1402,7 +1408,7 @@ class HdStream4uProvider {
         type: String(tmdbInfo?.media_type || "").toLowerCase() === "tv" || /season|episodes?|series|web[\s-]*series/i.test(rawTitle) || episodes.length > 1 ? "tv" : "movie",
         releaseDate: String(tmdbInfo?.release_date || tmdbInfo?.first_air_date || extractYear(rawTitle) || ""),
         servers,
-        episodes: episodes.length || bonusEpisodes.length ? [...episodes, ...bonusEpisodes].map((episode) => ({
+        episodes: episodes.length || uniqueBonusEpisodes.length ? [...episodes, ...uniqueBonusEpisodes].map((episode) => ({
           episodeId: episode.id,
           title: episode.title,
           episodeNumber: episode.number,

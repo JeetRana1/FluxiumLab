@@ -19,6 +19,19 @@ export class MangakProvider {
     return getJson(`${API_BASE}/titles/search?page=${page}&limit=${limit}&q=${encodeURIComponent(query)}`);
   }
 
+  static browse(options: { sort?: string; genres?: string; page?: number; limit?: number } = {}) {
+    const params = new URLSearchParams();
+    params.set('page', String(options.page || 1));
+    params.set('limit', String(options.limit || 20));
+    if (options.sort) params.set('sort', options.sort);
+    if (options.genres) params.set('genres', options.genres);
+    return getJson(`${API_BASE}/titles/search?${params.toString()}`);
+  }
+
+  static genres(limit = 100) {
+    return getJson(`${API_BASE}/genres?page=1&limit=${limit}`);
+  }
+
   static async info(id: string) {
     const payload: any = await getJson(`${API_BASE}/titles/search?page=1&limit=20&q=${encodeURIComponent(id)}`);
     const items = Array.isArray(payload?.data?.items) ? payload.data.items : [];

@@ -31,6 +31,27 @@ const routes = async (fastify, _options) => {
       return reply.status(502).send({ message: error.message });
     }
   });
+  fastify.get("/browse", async (request, reply) => {
+    try {
+      const result = await import_mangakProvider.MangakProvider.browse({
+        sort: request.query?.sort,
+        genres: request.query?.genres,
+        page: Number(request.query?.page) || 1,
+        limit: Number(request.query?.limit) || 21
+      });
+      return reply.send(result);
+    } catch (error) {
+      return reply.status(502).send({ message: error.message });
+    }
+  });
+  fastify.get("/genres", async (request, reply) => {
+    try {
+      const result = await import_mangakProvider.MangakProvider.genres(Number(request.query?.limit) || 100);
+      return reply.send(result);
+    } catch (error) {
+      return reply.status(502).send({ message: error.message });
+    }
+  });
   fastify.get("/info/:id", async (request, reply) => {
     try {
       const result = await import_mangakProvider.MangakProvider.info(request.params.id);
