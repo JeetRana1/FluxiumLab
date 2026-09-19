@@ -724,9 +724,9 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
                 ...(signal ? { signal } : {}),
                 // Flaky direct-IP CDNs (hubstream v4): avoid reusing poisoned
                 // keep-alive TLS sockets that fail with `write EPROTO` on reuse.
-                ...(isHubstreamCdn && !proxyUrl
-                  ? { httpAgent: hlsHttpFreshAgent, httpsAgent: hlsHttpsFreshAgent }
-                  : {}),
+                 ...((isHubstreamCdn || isAcekCdn) && !proxyUrl
+                   ? { httpAgent: hlsHttpFreshAgent, httpsAgent: hlsHttpsFreshAgent }
+                   : {}),
               });
             }, () => !!signal?.aborted);
             const hubElapsedMs = Date.now() - hubRequestStartedAt;
