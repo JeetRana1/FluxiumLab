@@ -587,7 +587,7 @@ const isAnimeLikeMovie = (media) => {
 };
 const normalizeSlug = (value) => String(value || "").toLowerCase().replace(/\.html$/i, "").replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
 const stripTrailingYear = (value) => value.replace(/-(19|20)\d{2}$/i, "");
-const HDHUB4U_POST_SITEMAP_URL = "https://new2.hdhub4u.cl/post-sitemap.xml";
+const HDHUB4U_POST_SITEMAP_URL = "https://new6.hdhub4u.cl/post-sitemap.xml";
 let hdhub4uSitemapCache = null;
 const fetchHdhub4uSitemapUrls = async () => {
   if (hdhub4uSitemapCache && hdhub4uSitemapCache.expiresAt > Date.now()) {
@@ -622,8 +622,8 @@ const searchHdhub4uByTitle = async (query) => {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       Accept: "application/json, text/plain, */*",
-      Origin: "https://new2.hdhub4u.cl",
-      Referer: `https://new2.hdhub4u.cl/?s=${encodeURIComponent(query)}`
+      Origin: "https://new6.hdhub4u.cl",
+      Referer: `https://new6.hdhub4u.cl/?s=${encodeURIComponent(query)}`
     }
   });
   const hits = Array.isArray(response.data?.hits) ? response.data.hits : [];

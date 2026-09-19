@@ -35,7 +35,7 @@ var cheerio = __toESM(require("cheerio"));
 var import_axios = __toESM(require("axios"));
 var import_vm = __toESM(require("vm"));
 var import_browserRuntimeExtractor = require("../../utils/browserRuntimeExtractor");
-const BASE_URL = "https://new5.hdhub4u.cl";
+const BASE_URL = "https://new6.hdhub4u.cl";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const TMDB_KEY = String(process.env.TMDB_KEY || "").trim();
 const STREAM_HOSTS = [
@@ -181,7 +181,7 @@ const absoluteUrl = (url, base = BASE_URL) => {
     return "";
   try {
     const parsed = new URL(raw, base);
-    if (/^(?:new1\.hdhub4u\.af|new2\.hdhub4u\.cl)$/i.test(parsed.hostname)) {
+    if (/^(?:new1\.hdhub4u\.af|new2\.hdhub4u\.cl|new5\.hdhub4u\.cl)$/i.test(parsed.hostname)) {
       parsed.protocol = "https:";
       parsed.hostname = new URL(BASE_URL).hostname;
     }
