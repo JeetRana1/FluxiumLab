@@ -1374,7 +1374,7 @@ export class HdStream4uProvider {
     let domResults: any[] = [];
     let hasNextPage = false;
     try {
-      const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
+      const searchUrl = `${BASE_URL}/${page > 1 ? `page/${page}/` : ''}?s=${encodeURIComponent(query)}`;
       const html = await fetchText(searchUrl, BASE_URL, 5000);
       const $ = cheerio.load(html);
       const results: any[] = [];
@@ -1382,8 +1382,11 @@ export class HdStream4uProvider {
       $('article, .post, .latestPost, .gridlove-post, .entry, .blog-entry, li.thumb').each((_, el) => {
         const anchor = $(el).find('h2 a, h3 a, .entry-title a, a[rel="bookmark"], figure a, a').first();
         const href = anchor.attr('href') || '';
-        const title = cleanText(anchor.text() || $(el).find('h2, h3, .entry-title, img').first().attr('alt') || $(el).find('h2, h3, .entry-title').first().text());
+        const title = cleanText(anchor.text()) || cleanText($(el).find('img').first().attr('alt')) || cleanText($(el).find('h2, h3, .entry-title, figcaption').first().text());
         if (!href || !title) return;
+        // Some mirrors return the homepage for ?s=. Never offer unrelated
+        // recent uploads as matches when the search index is unavailable.
+        if (!hasStrictTitleMatch(title, [query])) return;
         const image =
           $(el).find('img').first().attr('data-src') ||
           $(el).find('img').first().attr('data-lazy-src') ||
@@ -1408,7 +1411,7 @@ export class HdStream4uProvider {
       hasNextPage,
       results: domResults,
     };
-    cache.set(cacheKey, payload, 10 * 60 * 1000);
+    if (domResults.length) cache.set(cacheKey, payload, 10 * 60 * 1000);
     return payload;
   }
 
@@ -1529,6 +1532,12 @@ export class HdStream4uProvider {
         }
       }
       const watchLinks = extractWatchLinks($, pageUrl, html);
+      // Download gateways commonly precede the actual players in the page.
+      // Use a direct streaming player for the movie episode, keeping every
+      // alternative in servers and leaving numbered TV episodes untouched.
+      const movieWatchLink = watchLinks.find((href) => /^https:\/\/(?:hdstream4u|morencius)\.com\/file\//i.test(href))
+        || watchLinks.find((href) => /^https:\/\/(?:[^/]+\.)?hubstream\.[^/]+\/#/i.test(href))
+        || watchLinks[0] || pageUrl;
       const servers = watchLinks.map((href) => ({
         name: /hubstream|watchhd|hdstream4u\.com\/file|morencius\.com\/file/i.test(href) ? 'Watch Online' : 'HDHub4u',
         url: href,
@@ -1586,11 +1595,11 @@ export class HdStream4uProvider {
             }))
           : [
               {
-                episodeId: mediaIdFromUrl(watchLinks[0] || pageUrl),
+                episodeId: mediaIdFromUrl(movieWatchLink),
                 title: title || 'Movie',
                 episodeNumber: 1,
                 seasonNumber: 0,
-                url: watchLinks[0] || pageUrl,
+                url: movieWatchLink,
               },
             ],
         tmdbId: originalId,
@@ -2062,10 +2071,12 @@ export class HdStream4uProvider {
             // definitively dead ones (hard 4xx/5xx or an invalid manifest). A
             // probe that times out or errors ("unknown") is KEPT: the acek CDN
             // is slow/flaky, so a hiccup must not push the whole request into
-            // the slow Playwright race. A 2.5s cap keeps the worst case tight.
+            // the slow Playwright race. Cap each probe at half a second: the
+            // player still validates the playlist, and a slow probe is not a
+            // dead source.
             const states = await Promise.all(
               fastEmbed.sources.map((s: any) =>
-                verifySourcePlayableState(String(s?.url || ''), 'https://morencius.com/', 2500),
+                verifySourcePlayableState(String(s?.url || ''), 'https://morencius.com/', 500),
               ),
             );
             const aliveSources: any[] = fastEmbed.sources.filter(
@@ -2099,7 +2110,7 @@ export class HdStream4uProvider {
           // can never stall this request indefinitely.
           const firstSource = await Promise.race([
             Promise.any([filePromise, playbackPromise]).catch(() => null),
-            new Promise<void>((resolve) => setTimeout(() => resolve(), 45000)),
+            new Promise<void>((resolve) => setTimeout(() => resolve(), 18000)),
           ]);
         const hubResult = firstSource?.kind === 'hub' ? (firstSource.value as any) : null;
         if (hubResult?.sources?.length && firstSource) {
