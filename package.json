@@ -27,7 +27,7 @@
     "dependencies": {
         "@consumet/extensions": "github:solo12345689/consumet.ts",
         "@fastify/cors": "^8.5.0",
-        "@types/node": "^18.11.17",
+        "@types/node": "^25.9.2",
         "@types/ws": "^8.5.3",
         "axios": "^1.0.0",
         "chalk": "4.1.2",
