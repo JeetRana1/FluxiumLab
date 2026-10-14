@@ -1923,17 +1923,10 @@ export class HdStream4uProvider {
       options,
     );
     let filteredResult = filterStaleHubstreamSources(result);
+    // Do not repeat a full Playwright extraction when a HubStream token is
+    // dead. The browser/player can retry the returned source much faster than
+    // making the API perform a second 10-15 second extraction.
     let verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
-    if (verifiedResult?.hubstreamAllDead) {
-      result = await HdStream4uProvider.fetchSourcesUncached(
-        episodeId,
-        server,
-        _strictServer,
-        options,
-      );
-      filteredResult = filterStaleHubstreamSources(result);
-      verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
-    }
     if (verifiedResult?.sources?.length) {
       cache.set(cacheKey, verifiedResult, 5 * 60 * 1000);
       return verifiedResult;
@@ -2110,7 +2103,7 @@ export class HdStream4uProvider {
           // can never stall this request indefinitely.
           const firstSource = await Promise.race([
             Promise.any([filePromise, playbackPromise]).catch(() => null),
-            new Promise<void>((resolve) => setTimeout(() => resolve(), 18000)),
+             new Promise<void>((resolve) => setTimeout(() => resolve(), 10000)),
           ]);
         const hubResult = firstSource?.kind === 'hub' ? (firstSource.value as any) : null;
         if (hubResult?.sources?.length && firstSource) {

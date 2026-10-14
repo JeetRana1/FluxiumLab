@@ -1700,16 +1700,6 @@ class HdStream4uProvider {
     );
     let filteredResult = filterStaleHubstreamSources(result);
     let verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
-    if (verifiedResult?.hubstreamAllDead) {
-      result = await HdStream4uProvider.fetchSourcesUncached(
-        episodeId,
-        server,
-        _strictServer,
-        options
-      );
-      filteredResult = filterStaleHubstreamSources(result);
-      verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
-    }
     if (verifiedResult?.sources?.length) {
       cache.set(cacheKey, verifiedResult, 5 * 60 * 1e3);
       return verifiedResult;
@@ -1813,7 +1803,7 @@ class HdStream4uProvider {
         const filePromise = this.extractHdstream4uFileWithManifestPrefetch(`https://hdstream4u.com/file/${fileCode}`, server).then((value) => value?.sources?.length ? { kind: "file", value } : Promise.reject(new Error("No file sources")));
         const firstSource = await Promise.race([
           Promise.any([filePromise, playbackPromise]).catch(() => null),
-          new Promise((resolve) => setTimeout(() => resolve(), 18e3))
+          new Promise((resolve) => setTimeout(() => resolve(), 1e4))
         ]);
         const hubResult = firstSource?.kind === "hub" ? firstSource.value : null;
         if (hubResult?.sources?.length && firstSource) {
