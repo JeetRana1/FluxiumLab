@@ -34,6 +34,7 @@ module.exports = __toCommonJS(hdstream4uProvider_exports);
 var cheerio = __toESM(require("cheerio"));
 var import_axios = __toESM(require("axios"));
 var import_vm = __toESM(require("vm"));
+var import_crypto = require("crypto");
 var import_browserRuntimeExtractor = require("../../utils/browserRuntimeExtractor");
 const BASE_URL = "https://new7.hdhub4u.cl";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -370,6 +371,8 @@ const hubstreamTokenIsExpired = (url, nowSec = Math.floor(Date.now() / 1e3)) => 
   try {
     const parsed = new URL(url);
     for (const key of ["v", "kx", "e", "expires", "exp"]) {
+      if (key === "v" && parsed.pathname.startsWith("/hlsmod/"))
+        continue;
       const value = Number(parsed.searchParams.get(key) || "");
       if (Number.isFinite(value) && value >= 15e8 && value <= 22e8) {
         if (value < nowSec - 120)
@@ -1757,6 +1760,49 @@ class HdStream4uProvider {
     });
     return { ...result, sources, subtitles };
   }
+  static async extractHubstreamFast(embedUrl) {
+    try {
+      const page = new URL(embedUrl);
+      const id = page.hash.slice(1).split("&")[0];
+      if (!/^hubstream\.(?:art|pw|cc|ink|foo|boo)$/i.test(page.hostname) || !/^[a-z0-9_-]+$/i.test(id))
+        return null;
+      const api = new URL("/api/v1/video", page.origin);
+      api.search = new URLSearchParams({ id, w: "1920", h: "1080", r: "" }).toString();
+      const encrypted = (await fetchText(api.href, `${page.origin}/`, 4e3)).trim();
+      if (!/^(?:[a-f0-9]{32})+$/i.test(encrypted))
+        return null;
+      const decipher = (0, import_crypto.createDecipheriv)("aes-128-cbc", Buffer.from("kiemtienmua911ca"), Buffer.from("1234567890oiuytr"));
+      const payload = JSON.parse(Buffer.concat([decipher.update(Buffer.from(encrypted, "hex")), decipher.final()]).toString("utf8"));
+      const config = typeof payload.streamingConfig === "string" ? JSON.parse(payload.streamingConfig) : payload.streamingConfig;
+      const tiktok = config?.adjust?.Tiktok;
+      if (!payload.hlsVideoTiktok || tiktok?.disabled)
+        return null;
+      const manifest = new URL(payload.hlsVideoTiktok, page.origin);
+      if (manifest.origin !== page.origin || !manifest.pathname.startsWith("/hls/"))
+        return null;
+      if (tiktok?.domain) {
+        if (!/^[a-z0-9.-]+$/i.test(tiktok.domain))
+          return null;
+        manifest.pathname = `/hlsmod/${tiktok.domain}/${manifest.pathname.slice("/hls/".length)}`;
+      }
+      for (const [key, value] of Object.entries(tiktok?.params || {})) {
+        manifest.searchParams.set(key, String(value));
+      }
+      const body = await fetchText(manifest.href, `${page.origin}/`, 4e3);
+      if (!body.trimStart().startsWith("#EXTM3U"))
+        return null;
+      (0, import_browserRuntimeExtractor.setCachedHlsManifest)(manifest.href, body, "application/vnd.apple.mpegurl");
+      const subtitles = Object.entries(payload.subtitle || {}).flatMap(([lang, value]) => {
+        if (typeof value !== "string")
+          return [];
+        const url = absoluteUrl(value, page.origin).replace(/#.*$/, "");
+        return /\.(?:vtt|srt|ass)(?:\?|$)/i.test(url) ? [{ url, lang: cleanTrackLabel(lang) }] : [];
+      });
+      return { sources: [{ url: manifest.href, quality: "auto", isM3U8: true, isEmbed: false }], subtitles };
+    } catch {
+      return null;
+    }
+  }
   static async fetchSources(episodeId, server = "hdstream4u", _strictServer = false, options = {}) {
     return singleFlight(
       JSON.stringify(["watch", episodeId, server, _strictServer, options.mediaId]),
@@ -1799,7 +1845,7 @@ class HdStream4uProvider {
         return await extractStructuredPlayer(startUrl, server) || { sources: [], subtitles: [], error: "Player did not return a valid HLS manifest" };
       }
       if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
-        const playback = await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 12e3);
+        const playback = await this.extractHubstreamFast(startUrl) || await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 12e3);
         return {
           headers: {
             Referer: startUrl,
@@ -1829,7 +1875,7 @@ class HdStream4uProvider {
             (url) => /hubstream\.(?:art|pw|cc|ink|foo|boo)\/?#/i.test(url)
           ) || "";
           if (hubLink) {
-            hubPlaybackPromise = (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(hubLink, BASE_URL, 2e4).then(
+            hubPlaybackPromise = this.extractHubstreamFast(hubLink).then((fast) => fast || (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(hubLink, BASE_URL, 2e4)).then(
               (value) => value?.sources?.length ? { ok: true, hubLink, value } : { ok: false, hubLink, value: null }
             ).catch(() => ({ ok: false, hubLink, value: null }));
           }

@@ -534,11 +534,12 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       })
       .join('\n');
 
-      // HDStream and AniKoto's shiora/mikora playlists use these CDN segment hosts as
+      // HDStream, HubStream hlsmod and AniKoto playlists use these CDN hosts as
       // playable media despite their ad-like names. The reference proxy
       // preserves them, so only apply the legacy cleanup to other manifests.
        if (!/(?:shiora|mikora|norami|akirax)\.|morencius\.com/i.test(manifestUrl)
-         && !/^https?:\/\/(?:[^/]+\.)?hdstream4u\.com\//i.test(manifestUrl)) {
+         && !/^https?:\/\/(?:[^/]+\.)?hdstream4u\.com\//i.test(manifestUrl)
+         && !/^https?:\/\/hubstream\.(?:art|pw|cc|ink|foo|boo)\/hlsmod\//i.test(manifestUrl)) {
         output = output.replace(
           /#EXTINF:[^\n]*(?:\n#[^\n]*)*\n[^\n]*(?:p1\.ipstatp\.com\/obj\/ad-site-i18n|p\d+-ad-sg\.ibyteimg\.com|p\d+-ad-site-sign-sg\.tiktokcdn\.com)[^\n]*/gi,
           '',
@@ -845,13 +846,9 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       .filter((part) => part && !/^(referer|segment|cookie)=/i.test(part))
       .join('&');
 
-    let url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ''}`;
-    // HubStream's hlsmod path wraps the real CDN host in the URL path. Decode
-    // it before fetching; requesting the wrapper itself returns 404.
-    const hlsmodMatch = url.match(/^https:\/\/hubstream\.(?:art|pw|cc|ink|foo|boo)\/hlsmod\/([^/]+)(\/.*)$/i);
-    if (hlsmodMatch) {
-      url = `https://${hlsmodMatch[1]}${hlsmodMatch[2]}${passthroughQuery ? `?${passthroughQuery}` : ''}`;
-    }
+    // HubStream hlsmod serves playlists itself. Its embedded CDN hostname is
+    // routing metadata, not a replacement origin for the signed playlist path.
+    const url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ''}`;
     const incomingRange = String(request.headers.range || '');
     const isManifest = !segmentParam && shouldTreatAsManifestRequest(url, incomingRange);
 

@@ -429,7 +429,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       previousTag = "";
       return resolveAndProxy(trimmed, isSegment);
     }).join("\n");
-    if (!/(?:shiora|mikora|norami|akirax)\.|morencius\.com/i.test(manifestUrl) && !/^https?:\/\/(?:[^/]+\.)?hdstream4u\.com\//i.test(manifestUrl)) {
+    if (!/(?:shiora|mikora|norami|akirax)\.|morencius\.com/i.test(manifestUrl) && !/^https?:\/\/(?:[^/]+\.)?hdstream4u\.com\//i.test(manifestUrl) && !/^https?:\/\/hubstream\.(?:art|pw|cc|ink|foo|boo)\/hlsmod\//i.test(manifestUrl)) {
       output = output.replace(
         /#EXTINF:[^\n]*(?:\n#[^\n]*)*\n[^\n]*(?:p1\.ipstatp\.com\/obj\/ad-site-i18n|p\d+-ad-sg\.ibyteimg\.com|p\d+-ad-site-sign-sg\.tiktokcdn\.com)[^\n]*/gi,
         ""
@@ -623,11 +623,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const cookieParam = String(new URLSearchParams(rawQuery).get("cookie") || "").trim();
     const segmentParam = String(new URLSearchParams(rawQuery).get("segment") || "").trim() === "1";
     const passthroughQuery = rawQuery.split("&").filter((part) => part && !/^(referer|segment|cookie)=/i.test(part)).join("&");
-    let url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ""}`;
-    const hlsmodMatch = url.match(/^https:\/\/hubstream\.(?:art|pw|cc|ink|foo|boo)\/hlsmod\/([^/]+)(\/.*)$/i);
-    if (hlsmodMatch) {
-      url = `https://${hlsmodMatch[1]}${hlsmodMatch[2]}${passthroughQuery ? `?${passthroughQuery}` : ""}`;
-    }
+    const url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ""}`;
     const incomingRange = String(request.headers.range || "");
     const isManifest = !segmentParam && shouldTreatAsManifestRequest(url, incomingRange);
     const abortController = new AbortController();
