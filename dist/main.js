@@ -240,7 +240,7 @@ const fastify = (0, import_fastify.default)({
   maxParamLength: 1e3,
   logger: true
 });
-const MEDIA_PROXY_TOKEN_TTL_SECONDS = 600;
+const MEDIA_PROXY_TOKEN_TTL_SECONDS = Number(process.env.MEDIA_PROXY_TOKEN_TTL_SECONDS) || 21600;
 const createMediaProxyToken = () => {
   const secret = String(process.env.MEDIA_PROXY_TOKEN_SECRET || "").trim();
   if (!secret)
@@ -406,14 +406,13 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       }
     };
     let output = String(manifest || "");
-    output = output.replace(
-      /URI="([^"]+)"/g,
-      (_match, uri) => `URI="${resolveAndProxy(uri)}"`
-    );
-    output = output.replace(
-      /URI='([^']+)'/g,
-      (_match, uri) => `URI='${resolveAndProxy(uri)}'`
-    );
+    output = output.split("\n").map((line) => {
+      const binaryResource = /^#EXT-X-(?:KEY|SESSION-KEY|MAP):/i.test(line.trim());
+      return line.replace(
+        /URI=(["'])(.*?)\1/g,
+        (_match, quote, uri) => `URI=${quote}${resolveAndProxy(uri, binaryResource)}${quote}`
+      );
+    }).join("\n");
     let previousTag = "";
     output = output.split("\n").map((line) => {
       const trimmed = line.trim();
@@ -425,7 +424,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       }
       if (/^(data:|blob:)/i.test(trimmed))
         return line;
-      const isSubtitleResource = /(?:\/p\/|\.(?:vtt|srt|ass|js)(?:\?|$))/i.test(trimmed);
+      const isSubtitleResource = /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed) || !/^https:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl) && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed);
       const isSegment = /^#EXTINF\b/i.test(previousTag) && !isSubtitleResource;
       previousTag = "";
       return resolveAndProxy(trimmed, isSegment);
@@ -465,6 +464,8 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       return true;
     if (incomingRange)
       return false;
+    if (/^https:\/\/(?:[^/]+\.)?uprising\.best\/range\//i.test(url))
+      return true;
     if (/(?:ok\.ru|okcdn\.ru)\/.*\/video\//i.test(url))
       return true;
     return /\/(?:hls|oppai)\//i.test(url);
@@ -479,7 +480,8 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const isShioraCdn = /^https?:\/\/(?:megap|vidtub)\.(?:shiora\.(?:top|site)|norami\.top|akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.(?:mikora\.top|norami\.top|shiora\.(?:top|site))\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url);
     const isMorencius = /^https?:\/\/morencius\.com\//i.test(url);
     const isAcekCdn = /^https?:\/\/[^/]*\.acek-cdn\.com\//i.test(url);
-    const proxyCandidates = isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius ? [""] : isAcekCdn ? ["", ...(0, import_outboundProxy.getProxyCandidatesSync)()] : [...(0, import_outboundProxy.getProxyCandidatesSync)(), ""];
+    const isStructuredPlayer = /^https:\/\/(?:play4u\.org|vidaraa\.cc)(?:\/|$)/i.test(referer);
+    const proxyCandidates = isStructuredPlayer || isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius ? [""] : isAcekCdn ? ["", ...(0, import_outboundProxy.getProxyCandidatesSync)()] : [...(0, import_outboundProxy.getProxyCandidatesSync)(), ""];
     let lastError = null;
     const effectiveReferer = (() => {
       const safeReferer = String(referer || "").trim();

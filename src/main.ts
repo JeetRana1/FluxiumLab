@@ -280,7 +280,11 @@ const fastify = Fastify({
   logger: true,
 });
 
-const MEDIA_PROXY_TOKEN_TTL_SECONDS = 600;
+// Media-proxy tokens gate the edge worker. They used to expire after 10 minutes,
+// which silently killed long playback sessions (the player cached the token for
+// the whole page lifetime). Keep a long TTL; the player also refreshes in the
+// background, so this only needs to comfortably outlast a single watch session.
+const MEDIA_PROXY_TOKEN_TTL_SECONDS = Number(process.env.MEDIA_PROXY_TOKEN_TTL_SECONDS) || 21600;
 const createMediaProxyToken = (): string | null => {
   const secret = String(process.env.MEDIA_PROXY_TOKEN_SECRET || '').trim();
   if (!secret) return null;
@@ -501,14 +505,11 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
 
     let output = String(manifest || '');
 
-    output = output.replace(
-      /URI="([^"]+)"/g,
-      (_match, uri) => `URI="${resolveAndProxy(uri)}"`,
-    );
-    output = output.replace(
-      /URI='([^']+)'/g,
-      (_match, uri) => `URI='${resolveAndProxy(uri)}'`,
-    );
+    output = output.split('\n').map((line) => {
+      const binaryResource = /^#EXT-X-(?:KEY|SESSION-KEY|MAP):/i.test(line.trim());
+      return line.replace(/URI=(["'])(.*?)\1/g,
+        (_match, quote, uri) => `URI=${quote}${resolveAndProxy(uri, binaryResource)}${quote}`);
+    }).join('\n');
 
     let previousTag = '';
     output = output
@@ -524,7 +525,9 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
          // AnimeSalt subtitle URLs can be extensionless or end in .js. They may
          // follow an EXTINF line in the manifest, but must not receive the
          // segment marker or the HLS proxy will fetch them as media bytes.
-         const isSubtitleResource = /(?:\/p\/|\.(?:vtt|srt|ass|js)(?:\?|$))/i.test(trimmed);
+         const isSubtitleResource = /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed)
+           || (!/^https:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl)
+             && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed));
          const isSegment = /^#EXTINF\b/i.test(previousTag) && !isSubtitleResource;
         previousTag = '';
         return resolveAndProxy(trimmed, isSegment);
@@ -583,6 +586,9 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
   const shouldTreatAsManifestRequest = (url: string, incomingRange: string): boolean => {
     if (/\.m3u8(?:$|\?)/i.test(url)) return true;
     if (incomingRange) return false;
+    // Play4u uses image extensions for both master and variant playlists.
+    // Actual media/key requests are explicitly marked segment=1 by the rewriter.
+    if (/^https:\/\/(?:[^/]+\.)?uprising\.best\/range\//i.test(url)) return true;
     if (/(?:ok\.ru|okcdn\.ru)\/.*\/video\//i.test(url)) return true;
     return /\/(?:hls|oppai)\//i.test(url);
   };
@@ -619,7 +625,11 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url);
     const isMorencius = /^https?:\/\/morencius\.com\//i.test(url);
     const isAcekCdn = /^https?:\/\/[^/]*\.acek-cdn\.com\//i.test(url);
-    const proxyCandidates = isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius
+    // These streams are obtained directly; Vidaraa tokens include the issuing
+    // IP. Sending playback via an outbound proxy changes that IP and can stall
+    // or invalidate the token. Preserve the extraction route for child media.
+    const isStructuredPlayer = /^https:\/\/(?:play4u\.org|vidaraa\.cc)(?:\/|$)/i.test(referer);
+    const proxyCandidates = isStructuredPlayer || isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius
       ? ['']
       : isAcekCdn
         ? ['', ...getProxyCandidatesSync()]

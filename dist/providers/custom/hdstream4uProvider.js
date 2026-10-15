@@ -39,6 +39,8 @@ const BASE_URL = "https://new7.hdhub4u.cl";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const TMDB_KEY = String(process.env.TMDB_KEY || "").trim();
 const STREAM_HOSTS = [
+  "play4u.org",
+  "vidaraa.cc",
   "hubstream.art",
   "hubstream.pw",
   "hubstream.cc",
@@ -219,6 +221,59 @@ const fetchText = async (url, referer = BASE_URL, timeout = requestConfig.timeou
     }
   });
   return String(response.data || "");
+};
+const extractStructuredPlayer = async (url, server) => {
+  const parsed = new URL(url);
+  if (!["play4u.org", "vidaraa.cc"].includes(parsed.hostname))
+    return null;
+  try {
+    let urls = [];
+    let subtitles = [];
+    if (parsed.hostname === "play4u.org") {
+      const html = await fetchText(url, BASE_URL, 8e3);
+      const json = /window\.__PA_PLAY__\s*=\s*(\{[^\n]+\})\s*;/.exec(html)?.[1];
+      if (!json)
+        return null;
+      const payload = JSON.parse(json);
+      if (!payload.ok || !Array.isArray(payload.streams))
+        return null;
+      urls = payload.streams.map((stream) => stream?.m3u8_url).filter((value) => typeof value === "string");
+    } else {
+      const filecode = /^\/e\/([A-Za-z0-9_-]+)\/?$/.exec(parsed.pathname)?.[1];
+      if (!filecode)
+        return null;
+      const response = await import_axios.default.post(`${parsed.origin}/api/stream`, {
+        filecode,
+        device: "web",
+        codecs: []
+      }, { ...requestConfig, timeout: 8e3, headers: {
+        ...requestConfig.headers,
+        Referer: url,
+        Origin: parsed.origin,
+        "Content-Type": "application/json"
+      } });
+      if (typeof response.data?.streaming_url === "string")
+        urls = [response.data.streaming_url];
+      subtitles = (Array.isArray(response.data?.subtitles) ? response.data.subtitles : []).filter((track) => track.type === 0 && typeof track.file_path === "string").map((track) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
+    }
+    const sources = await Promise.all(urls.map(async (value) => {
+      const streamUrl = new URL(value, url).href;
+      if (!/^https?:\/\//i.test(streamUrl))
+        return null;
+      const manifest = await fetchText(streamUrl, url, 4e3);
+      if (!manifest.trimStart().startsWith("#EXTM3U"))
+        return null;
+      return { url: streamUrl, quality: "auto", isM3U8: true, server };
+    }).map((promise) => promise.catch(() => null)));
+    const valid = sources.filter(Boolean);
+    return valid.length ? {
+      headers: { Referer: url, Origin: parsed.origin, "User-Agent": USER_AGENT },
+      sources: valid,
+      subtitles
+    } : null;
+  } catch {
+    return null;
+  }
 };
 const PACKER_MARKER = "eval(function(p,a,c,k,e,d)";
 const extractPackedScripts = (text) => {
@@ -1378,7 +1433,7 @@ class HdStream4uProvider {
         }
       }
       const watchLinks = extractWatchLinks($, pageUrl, html);
-      const movieWatchLink = watchLinks.find((href) => /^https:\/\/(?:hdstream4u|morencius)\.com\/file\//i.test(href)) || watchLinks.find((href) => /^https:\/\/(?:[^/]+\.)?hubstream\.[^/]+\/#/i.test(href)) || watchLinks[0] || pageUrl;
+      const movieWatchLink = watchLinks.find((href) => /^https:\/\/play4u\.org\//i.test(href)) || watchLinks.find((href) => /^https:\/\/vidaraa\.cc\/e\//i.test(href)) || watchLinks.find((href) => /^https:\/\/(?:hdstream4u|morencius)\.com\/file\//i.test(href)) || watchLinks.find((href) => /^https:\/\/(?:[^/]+\.)?hubstream\.[^/]+\/#/i.test(href)) || watchLinks[0] || pageUrl;
       const servers = watchLinks.map((href) => ({
         name: /hubstream|watchhd|hdstream4u\.com\/file|morencius\.com\/file/i.test(href) ? "Watch Online" : "HDHub4u",
         url: href,
@@ -1692,14 +1747,14 @@ class HdStream4uProvider {
     if (cachedResult) {
       return cachedResult;
     }
-    let result = await HdStream4uProvider.fetchSourcesUncached(
+    const result = await HdStream4uProvider.fetchSourcesUncached(
       episodeId,
       server,
       _strictServer,
       options
     );
-    let filteredResult = filterStaleHubstreamSources(result);
-    let verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
+    const filteredResult = filterStaleHubstreamSources(result);
+    const verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
     if (verifiedResult?.sources?.length) {
       cache.set(cacheKey, verifiedResult, 5 * 60 * 1e3);
       return verifiedResult;
@@ -1716,12 +1771,33 @@ class HdStream4uProvider {
       if (!startUrl) {
         return { error: "episodeId is required" };
       }
+      if (["play4u.org", "vidaraa.cc"].includes(new URL(startUrl).hostname)) {
+        return await extractStructuredPlayer(startUrl, server) || { sources: [], subtitles: [], error: "Player did not return a valid HLS manifest" };
+      }
+      if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
+        const playback = await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 12e3);
+        return {
+          headers: {
+            Referer: startUrl,
+            "User-Agent": USER_AGENT,
+            ...playback.cookieHeader ? { Cookie: playback.cookieHeader } : {}
+          },
+          sources: playback.sources.map((source) => ({ ...source, server })),
+          subtitles: playback.subtitles || []
+        };
+      }
       let hubLink = "";
       let hubPlaybackPromise = null;
       if (/https?:\/\/(?:new\d+\.)?hdhub4u\.[^/]+\//i.test(startUrl)) {
         try {
           const pageHtml = await fetchText(startUrl);
           const watchLinks = extractWatchLinks(cheerio.load(pageHtml), startUrl, pageHtml);
+          const structuredLink = watchLinks.find((url) => /^https:\/\/(?:play4u\.org|vidaraa\.cc)\//i.test(url));
+          if (structuredLink) {
+            const playback = await extractStructuredPlayer(structuredLink, server);
+            if (playback?.sources?.length)
+              return playback;
+          }
           const directLink = watchLinks.find(
             (url) => /(?:hdstream4u|morencius)\.com\/(?:file|embed)\/[A-Za-z0-9_-]+/i.test(url)
           );
@@ -1739,39 +1815,21 @@ class HdStream4uProvider {
         } catch {
         }
       }
-      let hubstreamOnlyFallback = null;
       if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
-        const hubHash = /#([A-Za-z0-9_-]+)\/?$/i.exec(startUrl)?.[1] || "";
-        if (!hubHash) {
-          const hubPlayback = await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 2e4);
-          if (hubPlayback?.sources?.length) {
-            return {
-              headers: {
-                Referer: startUrl,
-                ...hubPlayback.cookieHeader ? { Cookie: hubPlayback.cookieHeader } : {},
-                "User-Agent": USER_AGENT
-              },
-              sources: hubPlayback.sources.map((s) => ({
-                url: s.url,
-                quality: s.quality || "auto",
-                isM3U8: s.isM3U8 || /\.m3u8/i.test(s.url),
-                server
-              })),
-              subtitles: hubPlayback.subtitles || []
-            };
-          }
-        } else if (!hubPlaybackPromise) {
-          hubstreamOnlyFallback = (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 2e4).then(
-            (value) => value?.sources?.length ? { ok: true, hubLink: startUrl, value } : { ok: false, hubLink: startUrl, value: null }
-          ).catch(() => ({ ok: false, hubLink: startUrl, value: null }));
-        }
+        const playback = (await hubPlaybackPromise)?.value;
+        return {
+          headers: {
+            Referer: startUrl,
+            "User-Agent": USER_AGENT,
+            ...playback?.cookieHeader ? { Cookie: playback.cookieHeader } : {}
+          },
+          sources: (playback?.sources || []).map((source) => ({ ...source, server })),
+          subtitles: playback?.subtitles || []
+        };
       }
       const fileCodeMatch = /^https?:\/\/(?:[^.]+\.)?(?:hdstream4u\.com|morencius\.com)\/(?:file|embed)\/([A-Za-z0-9_-]+)/i.exec(startUrl);
       let fileCode = fileCodeMatch?.[1] || (/^[a-z0-9_-]{8,}$/i.test(rawEpisodeId) ? rawEpisodeId : "");
-      if (!fileCode && hubstreamOnlyFallback) {
-        fileCode = /#([A-Za-z0-9_-]+)\/?$/i.exec(startUrl)?.[1] || "";
-      }
-      if (fileCode && !hubstreamOnlyFallback) {
+      if (fileCode) {
         const fastEmbed = await this.extractMorenciusEmbedFast(fileCode, server);
         if (fastEmbed?.sources?.length) {
           const states = await Promise.all(
@@ -1897,7 +1955,7 @@ class HdStream4uProvider {
           return hdResult;
         }
       }
-      const hubFallbackPromise = hubPlaybackPromise || hubstreamOnlyFallback;
+      const hubFallbackPromise = hubPlaybackPromise;
       if (hubFallbackPromise) {
         const hub = await hubFallbackPromise;
         if (hub?.ok && hub.value?.sources?.length) {
@@ -1916,14 +1974,6 @@ class HdStream4uProvider {
             subtitles: hub.value.subtitles || []
           };
         }
-      }
-      if (hubstreamOnlyFallback && fileCode) {
-        return HdStream4uProvider.fetchSourcesUncached(
-          `https://hdstream4u.com/file/${fileCode}`,
-          server,
-          _strictServer,
-          options
-        );
       }
       if (!/^https?:\/\//i.test(rawEpisodeId) && /^[a-z0-9_-]{8,}$/i.test(rawEpisodeId)) {
         const embedUrl = `https://hdstream4u.com/embed/${rawEpisodeId}`;

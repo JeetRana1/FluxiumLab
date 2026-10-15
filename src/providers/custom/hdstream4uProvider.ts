@@ -9,6 +9,8 @@ const USER_AGENT =
 const TMDB_KEY = String(process.env.TMDB_KEY || '').trim();
 
 const STREAM_HOSTS = [
+  'play4u.org',
+  'vidaraa.cc',
   'hubstream.art',
   'hubstream.pw',
   'hubstream.cc',
@@ -211,6 +213,52 @@ const fetchText = async (url: string, referer = BASE_URL, timeout = requestConfi
     },
   });
   return String(response.data || '');
+};
+
+// These players expose structured playback data; no browser or ad scripts are
+// needed. Play4u deliberately serves HLS under image-looking URL extensions.
+const extractStructuredPlayer = async (url: string, server: string): Promise<any | null> => {
+  const parsed = new URL(url);
+  if (!['play4u.org', 'vidaraa.cc'].includes(parsed.hostname)) return null;
+  try {
+    let urls: string[] = [];
+    let subtitles: Array<{ url: string; lang: string }> = [];
+    if (parsed.hostname === 'play4u.org') {
+      const html = await fetchText(url, BASE_URL, 8000);
+      const json = /window\.__PA_PLAY__\s*=\s*(\{[^\n]+\})\s*;/.exec(html)?.[1];
+      if (!json) return null;
+      const payload = JSON.parse(json);
+      if (!payload.ok || !Array.isArray(payload.streams)) return null;
+      urls = payload.streams.map((stream: any) => stream?.m3u8_url).filter((value: any) => typeof value === 'string');
+    } else {
+      const filecode = /^\/e\/([A-Za-z0-9_-]+)\/?$/.exec(parsed.pathname)?.[1];
+      if (!filecode) return null;
+      const response = await axios.post(`${parsed.origin}/api/stream`, {
+        filecode, device: 'web', codecs: [],
+      }, { ...requestConfig, timeout: 8000, headers: {
+        ...requestConfig.headers, Referer: url, Origin: parsed.origin,
+        'Content-Type': 'application/json',
+      } });
+      if (typeof response.data?.streaming_url === 'string') urls = [response.data.streaming_url];
+      subtitles = (Array.isArray(response.data?.subtitles) ? response.data.subtitles : [])
+        .filter((track: any) => track.type === 0 && typeof track.file_path === 'string')
+        .map((track: any) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
+    }
+    const sources = await Promise.all(urls.map(async (value) => {
+      const streamUrl = new URL(value, url).href;
+      if (!/^https?:\/\//i.test(streamUrl)) return null;
+      const manifest = await fetchText(streamUrl, url, 4000);
+      if (!manifest.trimStart().startsWith('#EXTM3U')) return null;
+      return { url: streamUrl, quality: 'auto', isM3U8: true, server };
+    }).map((promise) => promise.catch(() => null)));
+    const valid = sources.filter(Boolean);
+    return valid.length ? {
+      headers: { Referer: url, Origin: parsed.origin, 'User-Agent': USER_AGENT },
+      sources: valid, subtitles,
+    } : null;
+  } catch {
+    return null;
+  }
 };
 
 // The morencius/embed player ships a Dean Edwards p.a.c.k.e.r script:
@@ -1535,7 +1583,9 @@ export class HdStream4uProvider {
       // Download gateways commonly precede the actual players in the page.
       // Use a direct streaming player for the movie episode, keeping every
       // alternative in servers and leaving numbered TV episodes untouched.
-      const movieWatchLink = watchLinks.find((href) => /^https:\/\/(?:hdstream4u|morencius)\.com\/file\//i.test(href))
+      const movieWatchLink = watchLinks.find((href) => /^https:\/\/play4u\.org\//i.test(href))
+        || watchLinks.find((href) => /^https:\/\/vidaraa\.cc\/e\//i.test(href))
+        || watchLinks.find((href) => /^https:\/\/(?:hdstream4u|morencius)\.com\/file\//i.test(href))
         || watchLinks.find((href) => /^https:\/\/(?:[^/]+\.)?hubstream\.[^/]+\/#/i.test(href))
         || watchLinks[0] || pageUrl;
       const servers = watchLinks.map((href) => ({
@@ -1911,22 +1961,19 @@ export class HdStream4uProvider {
     if (cachedResult) {
       return cachedResult;
     }
-    // hubstream rotates between config variants (ads-only vs real payload), so
-    // the extracted token can be dead on arrival even though it passes
-    // hubstreamTokenIsExpired. Verify hubstream sources are actually playable
-    // before serving/caching them; if a dead variant was caught, re-extract
-    // once to land the real payload.
-    let result = await HdStream4uProvider.fetchSourcesUncached(
+    // HubStream tokens may already be dead on arrival. Probe before caching,
+    // without repeating the entire extraction pipeline for a failed token.
+    const result = await HdStream4uProvider.fetchSourcesUncached(
       episodeId,
       server,
       _strictServer,
       options,
     );
-    let filteredResult = filterStaleHubstreamSources(result);
+    const filteredResult = filterStaleHubstreamSources(result);
     // Do not repeat a full Playwright extraction when a HubStream token is
     // dead. The browser/player can retry the returned source much faster than
     // making the API perform a second 10-15 second extraction.
-    let verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
+    const verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
     if (verifiedResult?.sources?.length) {
       cache.set(cacheKey, verifiedResult, 5 * 60 * 1000);
       return verifiedResult;
@@ -1960,6 +2007,23 @@ export class HdStream4uProvider {
         return { error: 'episodeId is required' };
       }
 
+      if (['play4u.org', 'vidaraa.cc'].includes(new URL(startUrl).hostname)) {
+        return await extractStructuredPlayer(startUrl, server) || { sources: [], subtitles: [], error: 'Player did not return a valid HLS manifest' };
+      }
+
+      // HubStream hashes are independent IDs, not HDStream/Morencius file codes.
+      // Inventing a Morencius URL after a failed extraction caused serial waits
+      // and requests for nonexistent files (e.g. Carrie's six-character iosfpa).
+      if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
+        const playback = await extractPlaybackWithPlaywright(startUrl, BASE_URL, 12000);
+        return {
+          headers: { Referer: startUrl, 'User-Agent': USER_AGENT,
+            ...(playback.cookieHeader ? { Cookie: playback.cookieHeader } : {}) },
+          sources: playback.sources.map((source: any) => ({ ...source, server })),
+          subtitles: playback.subtitles || [],
+        };
+      }
+
       // HDHub pages often expose a separate "Watch Online" link that points
       // to the real HDStream file. Normalize that page URL before extraction.
       let hubLink = '';
@@ -1968,6 +2032,11 @@ export class HdStream4uProvider {
         try {
           const pageHtml = await fetchText(startUrl);
           const watchLinks = extractWatchLinks(cheerio.load(pageHtml), startUrl, pageHtml);
+          const structuredLink = watchLinks.find((url) => /^https:\/\/(?:play4u\.org|vidaraa\.cc)\//i.test(url));
+          if (structuredLink) {
+            const playback = await extractStructuredPlayer(structuredLink, server);
+            if (playback?.sources?.length) return playback;
+          }
           const directLink = watchLinks.find((url) =>
             /(?:hdstream4u|morencius)\.com\/(?:file|embed)\/[A-Za-z0-9_-]+/i.test(url),
           );
@@ -1997,64 +2066,25 @@ export class HdStream4uProvider {
         }
       }
 
-      // When the page resolved straight to a hubstream.art hash link (common on
-      // newer HDHub uploads that carry only a HubStream hash), prefer the
-      // hdstream4u.com file page and morencius.com embed for the same hash first.
-      // Those hosts are served reliably from datacenter IPs, whereas hubstream.art
-      // is often slow/Cloudflare-blocked. The hash is treated as a file code below;
-      // hubstream is kept only as a last-resort fallback via hubstreamOnlyFallback.
-      let hubstreamOnlyFallback: Promise<{ ok: boolean; hubLink: string; value: any } | null> | null = null;
+      // Reuse the extraction already started for a page's HubStream-only link.
       if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
-        const hubHash = /#([A-Za-z0-9_-]+)\/?$/i.exec(startUrl)?.[1] || '';
-        if (!hubHash) {
-          const hubPlayback = await extractPlaybackWithPlaywright(startUrl, BASE_URL, 20000);
-          if (hubPlayback?.sources?.length) {
-            return {
-              headers: {
-                Referer: startUrl,
-                ...(hubPlayback.cookieHeader ? { Cookie: hubPlayback.cookieHeader } : {}),
-                'User-Agent': USER_AGENT,
-              },
-              sources: hubPlayback.sources.map((s: any) => ({
-                url: s.url,
-                quality: s.quality || 'auto',
-                isM3U8: s.isM3U8 || /\.m3u8/i.test(s.url),
-                server,
-              })),
-              subtitles: hubPlayback.subtitles || [],
-            };
-          }
-        } else if (!hubPlaybackPromise) {
-          // Avoid a duplicate hubstream.art launch: line 1766 above already
-          // fired a parallel hubstream extraction when the same hash link was
-          // found on the HDHub page. Only kick off a second one when the caller
-          // went straight to a bare hubstream.art/#hash URL with no prior
-          // extraction in flight.
-          // Kick off hubstream extraction in parallel only as a fallback; the
-          // hdstream4u/morencius paths below are preferred and win first.
-          hubstreamOnlyFallback = extractPlaybackWithPlaywright(startUrl, BASE_URL, 20000)
-            .then((value) =>
-              value?.sources?.length
-                ? { ok: true, hubLink: startUrl, value }
-                : { ok: false, hubLink: startUrl, value: null },
-            )
-            .catch(() => ({ ok: false, hubLink: startUrl, value: null }));
-        }
+        const playback = (await hubPlaybackPromise)?.value;
+        return {
+          headers: { Referer: startUrl, 'User-Agent': USER_AGENT,
+            ...(playback?.cookieHeader ? { Cookie: playback.cookieHeader } : {}) },
+          sources: (playback?.sources || []).map((source: any) => ({ ...source, server })),
+          subtitles: playback?.subtitles || [],
+        };
       }
 
       // Extract the file code from any URL type (file, embed, etc.)
       const fileCodeMatch = /^https?:\/\/(?:[^.]+\.)?(?:hdstream4u\.com|morencius\.com)\/(?:file|embed)\/([A-Za-z0-9_-]+)/i.exec(startUrl);
       let fileCode = fileCodeMatch?.[1] || (/^[a-z0-9_-]{8,}$/i.test(rawEpisodeId) ? rawEpisodeId : '');
-      // A hubstream.art/#hash link carries the same file code as the hdstream4u
-      // file page, so use the hash so the reliable paths below are attempted first.
-      if (!fileCode && hubstreamOnlyFallback) {
-        fileCode = /#([A-Za-z0-9_-]+)\/?$/i.exec(startUrl)?.[1] || '';
-      }
 
 // Try the morencius.com embed page first — it reliably serves working
         // morencius.com/stream/ URLs instead of the broken hubstream URLs from
         // the decoded payload on the file page.
-      if (fileCode && !hubstreamOnlyFallback) {
+      if (fileCode) {
           // Fast path: the embed page's p.a.c.k.e.r payload is decoded in-process
           // (no Playwright). This typically yields the morencius stream in ~1s;
           // the Playwright race below is only a fallback when it fails.
@@ -2212,7 +2242,7 @@ export class HdStream4uProvider {
       // If the page carried a HubStream hash but the embed/file paths above did
       // not produce sources, honor the (already-running) hubstream extraction
       // once it completes — this is the last-resort source family for these pages.
-      const hubFallbackPromise = hubPlaybackPromise || hubstreamOnlyFallback;
+      const hubFallbackPromise = hubPlaybackPromise;
       if (hubFallbackPromise) {
         const hub = await hubFallbackPromise;
         if (hub?.ok && hub.value?.sources?.length) {
@@ -2233,17 +2263,6 @@ export class HdStream4uProvider {
         }
       }
 
-      // A HubStream-only episode has no direct file URL to try initially. If
-      // its matching HubStream page fails, retry the same identifier through
-      // the HDStream4U/Morencius extraction path as the secondary fallback.
-      if (hubstreamOnlyFallback && fileCode) {
-        return HdStream4uProvider.fetchSourcesUncached(
-          `https://hdstream4u.com/file/${fileCode}`,
-          server,
-          _strictServer,
-          options,
-        );
-      }
 
       // Fast path for direct hdstream embed identifiers (old hdstream4u.com/embed/ fallback).
       if (!/^https?:\/\//i.test(rawEpisodeId) && /^[a-z0-9_-]{8,}$/i.test(rawEpisodeId)) {

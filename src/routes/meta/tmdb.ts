@@ -829,9 +829,13 @@ const extractHdstreamMovieCandidateIds = (infoPayload: any): string[] => {
 
   servers.forEach((server: any) => {
     const url = String(server?.url || '').trim();
-    const fileCode = String(server?.fileCode || '').trim();
+    if (/^https:\/\/(?:play4u\.org|vidaraa\.cc)\//i.test(url)) push(url);
+  });
+
+  servers.forEach((server: any) => {
+    const url = String(server?.url || '').trim();
     if (/(?:hdstream4u|morencius)\.com\/file\//i.test(url)) {
-      push(fileCode || url);
+      push(url);
     }
   });
 
