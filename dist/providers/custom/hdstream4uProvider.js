@@ -1809,6 +1809,42 @@ class HdStream4uProvider {
       () => this.fetchSourcesUnshared(episodeId, server, _strictServer, options)
     );
   }
+  static async extractWatchAlternatives(urls, server) {
+    const results = await Promise.all(urls.slice(0, 4).map(async (url) => {
+      const started = Date.now();
+      let timer;
+      try {
+        const result = await Promise.race([
+          this.fetchSources(url, server),
+          new Promise((resolve) => {
+            timer = setTimeout(() => resolve(null), 1e4);
+          })
+        ]);
+        if (!result?.sources?.length)
+          return null;
+        return { result, url, elapsed: Date.now() - started };
+      } catch {
+        return null;
+      } finally {
+        if (timer)
+          clearTimeout(timer);
+      }
+    }));
+    const ready = results.filter((row) => !!row).sort((a, b) => a.elapsed - b.elapsed);
+    if (!ready.length)
+      return null;
+    return {
+      ...ready[0].result,
+      sources: dedupe(ready.flatMap(({ result, url, elapsed }) => result.sources.map((source) => ({
+        ...source,
+        server: new URL(url).hostname,
+        referer: source.referer || result.headers?.Referer || url,
+        origin: source.origin || result.headers?.Origin || "",
+        cookieHeader: source.cookieHeader || result.headers?.Cookie || "",
+        extractionTimeMs: elapsed
+      }))), (source) => source.url)
+    };
+  }
   static async fetchSourcesUnshared(episodeId, server, _strictServer, options) {
     const cacheKey = `fetchSources:${String(episodeId || "").trim()}|${server}|${String(
       options?.mediaId || ""
@@ -1862,6 +1898,14 @@ class HdStream4uProvider {
         try {
           const pageHtml = await fetchText(startUrl);
           const watchLinks = extractWatchLinks(cheerio.load(pageHtml), startUrl, pageHtml);
+          const alternatives = [...new Set(watchLinks.filter(
+            (url) => /^https:\/\/(?:play4u\.org\/|vidaraa\.cc\/e\/|(?:hdstream4u|morencius)\.com\/(?:file|embed)\/|hubstream\.(?:art|pw|cc|ink|foo|boo)\/#)/i.test(url)
+          ))];
+          if (alternatives.length > 1 && !extractEpisodeWatchEntries(pageHtml).length) {
+            const combined = await this.extractWatchAlternatives(alternatives, server);
+            if (combined?.sources?.length)
+              return combined;
+          }
           const structuredLink = watchLinks.find((url) => /^https:\/\/(?:play4u\.org|vidaraa\.cc)\//i.test(url));
           if (structuredLink) {
             const playback = await extractStructuredPlayer(structuredLink, server);
