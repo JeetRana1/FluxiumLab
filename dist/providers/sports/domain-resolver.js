@@ -22,6 +22,7 @@ __export(domain_resolver_exports, {
 });
 module.exports = __toCommonJS(domain_resolver_exports);
 const KNOWN_DOMAINS = [
+  "https://mybuffstreams.plus",
   ...process.env.BUFFSTREAMS_BASE_URL ? [process.env.BUFFSTREAMS_BASE_URL.replace(/\/+$/, "")] : [],
   "https://buffstreams.ir"
 ];
@@ -73,7 +74,7 @@ function startProbe() {
 startProbe();
 const BaseUrlResolver = {
   getBaseUrl() {
-    return KNOWN_DOMAINS[0];
+    return cachedUrl || KNOWN_DOMAINS[0];
   },
   async forceProbe() {
     const url = await probeAll();

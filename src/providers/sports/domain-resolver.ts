@@ -1,4 +1,5 @@
 const KNOWN_DOMAINS: string[] = [
+  'https://mybuffstreams.plus',
   ...(process.env.BUFFSTREAMS_BASE_URL ? [process.env.BUFFSTREAMS_BASE_URL.replace(/\/+$/, '')] : []),
   'https://buffstreams.ir',
 ];
@@ -57,7 +58,7 @@ startProbe();
 
 export const BaseUrlResolver = {
   getBaseUrl(): string {
-    return KNOWN_DOMAINS[0];
+    return cachedUrl || KNOWN_DOMAINS[0];
   },
 
   async forceProbe(): Promise<string> {

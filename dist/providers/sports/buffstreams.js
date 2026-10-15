@@ -34,7 +34,7 @@ class BuffStreams extends import_models.MovieParser {
     this.supportedTypes = /* @__PURE__ */ new Set([import_extensions.TvType.MOVIE, import_extensions.TvType.TVSERIES]);
     this.userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     this.REQUEST_TIMEOUT_MS = 8e3;
-    this.DEEP_PROBE_CONCURRENCY = 4;
+    this.DEEP_PROBE_CONCURRENCY = 8;
     this.DEEP_PROBE_TTL_MS = 5 * 60 * 1e3;
     this.deepProbeCache = /* @__PURE__ */ new Map();
     this.probeInFlight = /* @__PURE__ */ new Map();
@@ -448,9 +448,6 @@ class BuffStreams extends import_models.MovieParser {
     return sections;
   }
   async fetchCategoryStreams(url) {
-    const response = await fetch(url, { headers: this.buildHeaders(url) });
-    if (!response.ok)
-      throw new Error(`HTTP error! status: ${response.status}`);
     const html = await this.fetchLeanHtml(url, this.homeUrl, {
       maxBytes: 900 * 1024,
       stopWhen: (text) => /<\/html>/i.test(text)
@@ -459,7 +456,7 @@ class BuffStreams extends import_models.MovieParser {
   }
   async fetchAllStreams() {
     const b = this.baseUrl;
-    const urls = [`${b}/index7`, `${b}/index18`, ...Object.values(this.getAllCategoryPages(b))];
+    const urls = [`${b}/index7`, `${b}/index18`];
     const results = await Promise.allSettled(
       urls.map((url) => this.fetchCategoryStreams(url))
     );
@@ -674,8 +671,7 @@ class BuffStreams extends import_models.MovieParser {
           streams = await this.fetchAllStreams();
         }
       }
-      const probeLimit = 24;
-      const toProbe = streams.slice(0, probeLimit);
+      const toProbe = streams.filter((stream) => stream?.isLive || /in progress|live|started/i.test(`${stream?.title || ""} ${stream?.statusText || ""}`)).slice(0, 2);
       if (toProbe.length) {
         streams = await this.batchDeepProbe(streams);
       }

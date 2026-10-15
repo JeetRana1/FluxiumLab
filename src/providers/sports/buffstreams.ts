@@ -31,7 +31,7 @@ export class BuffStreams extends MovieParser {
   private readonly userAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
   private readonly REQUEST_TIMEOUT_MS = 8000;
-  private readonly DEEP_PROBE_CONCURRENCY = 4;
+  private readonly DEEP_PROBE_CONCURRENCY = 8;
   private readonly DEEP_PROBE_TTL_MS = 5 * 60 * 1000;
 
   private deepProbeCache = new Map<string, DeepProbeResult & { probedAt: number }>();
@@ -567,8 +567,6 @@ export class BuffStreams extends MovieParser {
   }
 
   private async fetchCategoryStreams(url: string): Promise<any[]> {
-    const response = await fetch(url, { headers: this.buildHeaders(url) });
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
     const html = await this.fetchLeanHtml(url, this.homeUrl, {
       maxBytes: 900 * 1024,
       stopWhen: (text: string) => /<\/html>/i.test(text),
@@ -578,7 +576,9 @@ export class BuffStreams extends MovieParser {
 
   private async fetchAllStreams(): Promise<any[]> {
     const b = this.baseUrl;
-    const urls = [`${b}/index7`, `${b}/index18`, ...Object.values(this.getAllCategoryPages(b))];
+    // The aggregate pages already contain the current catalog. Fetching every
+    // sport page as well made the homepage wait for the slowest upstream page.
+    const urls = [`${b}/index7`, `${b}/index18`];
     const results = await Promise.allSettled(
       urls.map((url) => this.fetchCategoryStreams(url)),
     );
@@ -841,8 +841,11 @@ export class BuffStreams extends MovieParser {
         }
       }
 
-      const probeLimit = 24;
-      const toProbe = streams.slice(0, probeLimit);
+      // Only verify events that already look live. Probing every catalog item
+      // made the initial page wait on many extra upstream requests.
+      const toProbe = streams
+        .filter((stream) => stream?.isLive || /in progress|live|started/i.test(`${stream?.title || ''} ${stream?.statusText || ''}`))
+        .slice(0, 2);
       if (toProbe.length) {
         streams = await this.batchDeepProbe(streams);
       }

@@ -305,6 +305,22 @@ const routes = async (fastify: FastifyInstance, _options: RegisterOptions) => {
             ? await racing.fetchEpisodeSources(target)
             : await buffstreams.fetchEpisodeSources(target),
         );
+        // GhoulStreams intentionally uses the provider's embed page. Do not
+        // expose the provider's internal HLS playlist as a player option.
+        const resolvedEmbedUrl = String((data as any)?.embedUrl || '').trim();
+        if (!isRacing && resolvedEmbedUrl && isAbsoluteHttpUrl(resolvedEmbedUrl)) {
+          (data as any).sources = [
+            {
+              url: resolvedEmbedUrl,
+              server: 'Embed',
+              quality: 'auto',
+              isM3U8: false,
+              isDirect: false,
+              engine: 'iframe',
+              headers: (data as any)?.headers || {},
+            },
+          ];
+        }
         if (Array.isArray((data as any)?.sources) && (data as any).sources.length > 0) {
           setStreamAvailability(target, true, 'source_available');
         } else if (

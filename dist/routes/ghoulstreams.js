@@ -293,6 +293,20 @@ const routes = async (fastify, _options) => {
           cacheKey,
           async () => isRacing ? await racing.fetchEpisodeSources(target) : await buffstreams.fetchEpisodeSources(target)
         );
+        const resolvedEmbedUrl = String(data?.embedUrl || "").trim();
+        if (!isRacing && resolvedEmbedUrl && isAbsoluteHttpUrl(resolvedEmbedUrl)) {
+          data.sources = [
+            {
+              url: resolvedEmbedUrl,
+              server: "Embed",
+              quality: "auto",
+              isM3U8: false,
+              isDirect: false,
+              engine: "iframe",
+              headers: data?.headers || {}
+            }
+          ];
+        }
         if (Array.isArray(data?.sources) && data.sources.length > 0) {
           setStreamAvailability(target, true, "source_available");
         } else if (!Array.isArray(data?.sources) || data.sources.length === 0) {
