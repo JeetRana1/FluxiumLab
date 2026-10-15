@@ -1880,11 +1880,12 @@ export class HdStream4uProvider {
   static async extractMorenciusEmbedFast(
     fileCode: string,
     server: string,
+    pageUrl = `https://morencius.com/embed/${fileCode}`,
   ): Promise<any | null> {
     if (!fileCode || !/^[A-Za-z0-9_-]+$/.test(fileCode)) return null;
     try {
       const html = await fetchText(
-        `https://morencius.com/embed/${fileCode}`,
+        pageUrl,
         'https://hdstream4u.com/',
         8000,
       );
@@ -1893,7 +1894,7 @@ export class HdStream4uProvider {
 
       const sources: Array<{ url: string; quality: string; isM3U8: boolean; server: string }> = [];
       const pushUrl = (url: string) => {
-        const absolute = url.startsWith('/') ? `https://morencius.com${url}` : url;
+        const absolute = absoluteUrl(url, pageUrl);
         if (isRawVideoUrl(absolute)) {
           sources.push({
             url: absolute,
@@ -1906,6 +1907,10 @@ export class HdStream4uProvider {
       // hls2 (acek-cdn) is the reliable CDN with real .ts segments.
       // hls3 (mindbodywellness.space) is a backup text-manifest mirror.
       // hls4 (morencius origin) is the legacy stream that may be ad-only.
+      // HDStream's file page also serves the packed player now. Prefer its
+      // same-origin stream, resolving relative URLs against that file page.
+      const isHdstreamFile = new URL(pageUrl).hostname === 'hdstream4u.com';
+      if (isHdstreamFile && links.hls4) pushUrl(links.hls4);
       if (links.hls2) pushUrl(links.hls2);
       if (links.hls3) pushUrl(links.hls3);
       if (links.hls4) pushUrl(links.hls4);
@@ -1914,7 +1919,7 @@ export class HdStream4uProvider {
 
       const subtitles = links.subtitles
         .map((t) => ({
-          url: t.url.startsWith('/') ? `https://morencius.com${t.url}` : t.url,
+          url: absoluteUrl(t.url, pageUrl),
           lang: cleanTrackLabel(t.label),
         }))
         .filter((t) => /\.(vtt|srt|ass)/i.test(t.url))
@@ -1922,7 +1927,7 @@ export class HdStream4uProvider {
 
       return {
         headers: {
-          Referer: 'https://morencius.com/',
+          Referer: isHdstreamFile ? pageUrl : 'https://morencius.com/',
           'User-Agent': USER_AGENT,
         },
         sources: dedupe(sources, (s: any) => s.url).map((s: any) => ({
@@ -2110,7 +2115,12 @@ export class HdStream4uProvider {
           // Fast path: the embed page's p.a.c.k.e.r payload is decoded in-process
           // (no Playwright). This typically yields the morencius stream in ~1s;
           // the Playwright race below is only a fallback when it fails.
-          const fastEmbed = await this.extractMorenciusEmbedFast(fileCode, server);
+          const fastFile = await this.extractMorenciusEmbedFast(
+            fileCode, server, `https://hdstream4u.com/file/${fileCode}`,
+          );
+          const fastEmbed = fastFile?.sources?.length
+            ? fastFile
+            : await this.extractMorenciusEmbedFast(fileCode, server);
           if (fastEmbed?.sources?.length) {
             // Verify every extracted source in parallel and drop only the
             // definitively dead ones (hard 4xx/5xx or an invalid manifest). A
@@ -2121,7 +2131,7 @@ export class HdStream4uProvider {
             // dead source.
             const states = await Promise.all(
               fastEmbed.sources.map((s: any) =>
-                verifySourcePlayableState(String(s?.url || ''), 'https://morencius.com/', 500),
+                verifySourcePlayableState(String(s?.url || ''), fastEmbed.headers.Referer, 500),
               ),
             );
             const aliveSources: any[] = fastEmbed.sources.filter(
@@ -2130,7 +2140,7 @@ export class HdStream4uProvider {
             if (aliveSources.length) {
               return {
                 headers: {
-                  Referer: 'https://morencius.com/',
+                  Referer: fastEmbed.headers.Referer,
                   'User-Agent': USER_AGENT,
                 },
                 sources: aliveSources.map((s: any) => ({

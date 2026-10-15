@@ -1680,12 +1680,12 @@ class HdStream4uProvider {
   // Node (no Playwright). Returns the acek-cdn stream (hls2) as primary, the
   // mindbodywellness mirror (hls3) as backup, and the morencius origin (hls4) as
   // last resort, plus any vtt subtitle tracks.
-  static async extractMorenciusEmbedFast(fileCode, server) {
+  static async extractMorenciusEmbedFast(fileCode, server, pageUrl = `https://morencius.com/embed/${fileCode}`) {
     if (!fileCode || !/^[A-Za-z0-9_-]+$/.test(fileCode))
       return null;
     try {
       const html = await fetchText(
-        `https://morencius.com/embed/${fileCode}`,
+        pageUrl,
         "https://hdstream4u.com/",
         8e3
       );
@@ -1694,7 +1694,7 @@ class HdStream4uProvider {
         return null;
       const sources = [];
       const pushUrl = (url) => {
-        const absolute = url.startsWith("/") ? `https://morencius.com${url}` : url;
+        const absolute = absoluteUrl(url, pageUrl);
         if (isRawVideoUrl(absolute)) {
           sources.push({
             url: absolute,
@@ -1704,6 +1704,9 @@ class HdStream4uProvider {
           });
         }
       };
+      const isHdstreamFile = new URL(pageUrl).hostname === "hdstream4u.com";
+      if (isHdstreamFile && links.hls4)
+        pushUrl(links.hls4);
       if (links.hls2)
         pushUrl(links.hls2);
       if (links.hls3)
@@ -1713,12 +1716,12 @@ class HdStream4uProvider {
       if (!sources.length)
         return null;
       const subtitles = links.subtitles.map((t) => ({
-        url: t.url.startsWith("/") ? `https://morencius.com${t.url}` : t.url,
+        url: absoluteUrl(t.url, pageUrl),
         lang: cleanTrackLabel(t.label)
       })).filter((t) => /\.(vtt|srt|ass)/i.test(t.url)).filter((t, i, arr) => arr.findIndex((x) => x.url === t.url) === i);
       return {
         headers: {
-          Referer: "https://morencius.com/",
+          Referer: isHdstreamFile ? pageUrl : "https://morencius.com/",
           "User-Agent": USER_AGENT
         },
         sources: dedupe(sources, (s) => s.url).map((s) => ({
@@ -1851,11 +1854,16 @@ class HdStream4uProvider {
       const fileCodeMatch = /^https?:\/\/(?:[^.]+\.)?(?:hdstream4u\.com|morencius\.com)\/(?:file|embed)\/([A-Za-z0-9_-]+)/i.exec(startUrl);
       let fileCode = fileCodeMatch?.[1] || (/^[a-z0-9_-]{8,}$/i.test(rawEpisodeId) ? rawEpisodeId : "");
       if (fileCode) {
-        const fastEmbed = await this.extractMorenciusEmbedFast(fileCode, server);
+        const fastFile = await this.extractMorenciusEmbedFast(
+          fileCode,
+          server,
+          `https://hdstream4u.com/file/${fileCode}`
+        );
+        const fastEmbed = fastFile?.sources?.length ? fastFile : await this.extractMorenciusEmbedFast(fileCode, server);
         if (fastEmbed?.sources?.length) {
           const states = await Promise.all(
             fastEmbed.sources.map(
-              (s) => verifySourcePlayableState(String(s?.url || ""), "https://morencius.com/", 500)
+              (s) => verifySourcePlayableState(String(s?.url || ""), fastEmbed.headers.Referer, 500)
             )
           );
           const aliveSources = fastEmbed.sources.filter(
@@ -1864,7 +1872,7 @@ class HdStream4uProvider {
           if (aliveSources.length) {
             return {
               headers: {
-                Referer: "https://morencius.com/",
+                Referer: fastEmbed.headers.Referer,
                 "User-Agent": USER_AGENT
               },
               sources: aliveSources.map((s) => ({
