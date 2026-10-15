@@ -1938,6 +1938,28 @@ export class HdStream4uProvider {
     }
   }
 
+  static normalizeSubtitleSources(result: any): any {
+    if (!Array.isArray(result?.sources)) return result;
+    const subtitles = [...(Array.isArray(result.subtitles) ? result.subtitles : [])];
+    const sources = result.sources.filter((source: any) => {
+      const url = String(source?.url || '');
+      if (!/\.(?:vtt|srt|ass)(?:[?#]|$)/i.test(url)) return true;
+      // Some HDStream decoded payloads put captions in a source field.
+      // Never expose caption/thumbnail files as playable video sources.
+      if (/thumbnail|storyboard|sprite/i.test(url) || source?.kind === 'thumbnails') return false;
+      if (!subtitles.some((track: any) => track.url === url)) {
+        const language = url.match(/[_\-.](eng?|hin?|hindi|english)\.(?:vtt|srt|ass)(?:[?#]|$)/i)?.[1] || '';
+        subtitles.push({
+          url,
+          lang: source.lang || source.label || (/^(?:en|eng|english)$/i.test(language)
+            ? 'English' : /^(?:hi|hin|hindi)$/i.test(language) ? 'Hindi' : 'Unknown'),
+        });
+      }
+      return false;
+    });
+    return { ...result, sources, subtitles };
+  }
+
   static async fetchSources(
     episodeId: string,
     server = 'hdstream4u',
@@ -1969,7 +1991,7 @@ export class HdStream4uProvider {
       _strictServer,
       options,
     );
-    const filteredResult = filterStaleHubstreamSources(result);
+    const filteredResult = filterStaleHubstreamSources(this.normalizeSubtitleSources(result));
     // Do not repeat a full Playwright extraction when a HubStream token is
     // dead. The browser/player can retry the returned source much faster than
     // making the API perform a second 10-15 second extraction.

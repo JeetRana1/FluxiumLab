@@ -1733,6 +1733,27 @@ class HdStream4uProvider {
       return null;
     }
   }
+  static normalizeSubtitleSources(result) {
+    if (!Array.isArray(result?.sources))
+      return result;
+    const subtitles = [...Array.isArray(result.subtitles) ? result.subtitles : []];
+    const sources = result.sources.filter((source) => {
+      const url = String(source?.url || "");
+      if (!/\.(?:vtt|srt|ass)(?:[?#]|$)/i.test(url))
+        return true;
+      if (/thumbnail|storyboard|sprite/i.test(url) || source?.kind === "thumbnails")
+        return false;
+      if (!subtitles.some((track) => track.url === url)) {
+        const language = url.match(/[_\-.](eng?|hin?|hindi|english)\.(?:vtt|srt|ass)(?:[?#]|$)/i)?.[1] || "";
+        subtitles.push({
+          url,
+          lang: source.lang || source.label || (/^(?:en|eng|english)$/i.test(language) ? "English" : /^(?:hi|hin|hindi)$/i.test(language) ? "Hindi" : "Unknown")
+        });
+      }
+      return false;
+    });
+    return { ...result, sources, subtitles };
+  }
   static async fetchSources(episodeId, server = "hdstream4u", _strictServer = false, options = {}) {
     return singleFlight(
       JSON.stringify(["watch", episodeId, server, _strictServer, options.mediaId]),
@@ -1753,7 +1774,7 @@ class HdStream4uProvider {
       _strictServer,
       options
     );
-    const filteredResult = filterStaleHubstreamSources(result);
+    const filteredResult = filterStaleHubstreamSources(this.normalizeSubtitleSources(result));
     const verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
     if (verifiedResult?.sources?.length) {
       cache.set(cacheKey, verifiedResult, 5 * 60 * 1e3);
