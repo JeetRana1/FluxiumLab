@@ -485,7 +485,7 @@ const routes = async (fastify, options) => {
             timeout: 3e3
           });
           const $ = cheerio.load(res.data);
-          const iframe12 = $("#options-0 iframe").attr("data-src") || $("#options-0 iframe").attr("src");
+          const iframe12 = $("#options-0 iframe").attr("data-src") || $("#options-0 iframe").attr("src") || "";
           const subtitles = [];
           let cookies2 = "";
           if (iframe12) {

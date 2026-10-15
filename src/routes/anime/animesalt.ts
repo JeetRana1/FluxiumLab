@@ -643,7 +643,7 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
           // ── Server 1 (as-cdn*.top) ───────────────────────────────────────
           const iframe1 =
             $('#options-0 iframe').attr('data-src') ||
-            $('#options-0 iframe').attr('src');
+            $('#options-0 iframe').attr('src') || '';
           const subtitles: any[] = [];
           let cookies = '';
           if (iframe1) {

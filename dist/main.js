@@ -429,7 +429,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       previousTag = "";
       return resolveAndProxy(trimmed, isSegment);
     }).join("\n");
-    if (!/(?:shiora|mikora|norami|akirax)\.|morencius\.com/i.test(manifestUrl)) {
+    if (!/(?:shiora|mikora|norami|akirax)\.|morencius\.com/i.test(manifestUrl) && !/^https?:\/\/(?:[^/]+\.)?hdstream4u\.com\//i.test(manifestUrl)) {
       output = output.replace(
         /#EXTINF:[^\n]*(?:\n#[^\n]*)*\n[^\n]*(?:p1\.ipstatp\.com\/obj\/ad-site-i18n|p\d+-ad-sg\.ibyteimg\.com|p\d+-ad-site-sign-sg\.tiktokcdn\.com)[^\n]*/gi,
         ""

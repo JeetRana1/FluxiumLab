@@ -474,18 +474,9 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
   });
 };
 
-const generateAnilistMeta = (provider: string | undefined = undefined): Anilist => {
-  // Do NOT pass getProxyCandidatesSync() here: Proxy.setProxy prefixes the
-  // proxy URL onto every outgoing request, which corrupts AniList's absolute
-  // graphql URLs (e.g. "<proxy>https://graphql.anilist.co") and throws
-  // "Invalid URL". AniList is reached directly with browser-style headers.
-  const anilist = new Anilist(configureProvider(new AnimeSama()));
-
-  // AniList now returns 403/404 unless the GraphQL call looks like a real
-  // browser request (anti-bot). Attach a browser-style Referer/Origin and
-  // User-Agent so trending/search/advanced-search don't silently fail.
-  if (typeof anilist.client?.interceptors?.request?.use === 'function') {
-    anilist.client.interceptors.request.use((config: any) => {
+class BrowserAnilist extends Anilist {
+  configureBrowserHeaders(): void {
+    this.client.interceptors.request.use((config) => {
       if (String(config.url || '').includes('graphql.anilist.co')) {
         config.headers = config.headers || {};
         config.headers['Referer'] = 'https://anilist.co/';
@@ -497,6 +488,19 @@ const generateAnilistMeta = (provider: string | undefined = undefined): Anilist 
       return config;
     });
   }
+}
+
+const generateAnilistMeta = (provider: string | undefined = undefined): Anilist => {
+  // Do NOT pass getProxyCandidatesSync() here: Proxy.setProxy prefixes the
+  // proxy URL onto every outgoing request, which corrupts AniList's absolute
+  // graphql URLs (e.g. "<proxy>https://graphql.anilist.co") and throws
+  // "Invalid URL". AniList is reached directly with browser-style headers.
+  const anilist = new BrowserAnilist(configureProvider(new AnimeSama()));
+
+  // AniList now returns 403/404 unless the GraphQL call looks like a real
+  // browser request (anti-bot). Attach a browser-style Referer/Origin and
+  // User-Agent so trending/search/advanced-search don't silently fail.
+  anilist.configureBrowserHeaders();
 
   return anilist;
 };

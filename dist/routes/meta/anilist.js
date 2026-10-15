@@ -430,10 +430,9 @@ const routes = async (fastify, options) => {
     }
   });
 };
-const generateAnilistMeta = (provider = void 0) => {
-  const anilist = new import_anilist.default((0, import_provider.configureProvider)(new import_animesama.default()));
-  if (typeof anilist.client?.interceptors?.request?.use === "function") {
-    anilist.client.interceptors.request.use((config) => {
+class BrowserAnilist extends import_anilist.default {
+  configureBrowserHeaders() {
+    this.client.interceptors.request.use((config) => {
       if (String(config.url || "").includes("graphql.anilist.co")) {
         config.headers = config.headers || {};
         config.headers["Referer"] = "https://anilist.co/";
@@ -444,6 +443,10 @@ const generateAnilistMeta = (provider = void 0) => {
       return config;
     });
   }
+}
+const generateAnilistMeta = (provider = void 0) => {
+  const anilist = new BrowserAnilist((0, import_provider.configureProvider)(new import_animesama.default()));
+  anilist.configureBrowserHeaders();
   return anilist;
 };
 const searchMyanimelist = async (query, limit = 5) => {
