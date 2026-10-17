@@ -2181,10 +2181,14 @@ export class HdStream4uProvider {
         const playback = fastIsLive
           ? fastPlayback
           : await extractPlaybackWithPlaywright(startUrl, BASE_URL, 12000);
+        const orderedSources = [...playback.sources].sort((a: any, b: any) => {
+          const score = (source: any) => /tiktokcdn\.com/i.test(String(source?.url || '')) ? 10 : 0;
+          return score(b) - score(a);
+        });
         return {
           headers: { Referer: startUrl, 'User-Agent': USER_AGENT,
             ...(playback.cookieHeader ? { Cookie: playback.cookieHeader } : {}) },
-          sources: playback.sources.map((source: any) => ({ ...source, server })),
+          sources: orderedSources.map((source: any) => ({ ...source, server })),
           subtitles: playback.subtitles || [],
         };
       }

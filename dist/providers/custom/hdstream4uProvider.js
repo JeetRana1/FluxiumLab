@@ -1934,13 +1934,17 @@ class HdStream4uProvider {
         )) : [];
         const fastIsLive = fastPlayback?.sources?.length && fastSourceStates.some((state) => state === "ok");
         const playback = fastIsLive ? fastPlayback : await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 12e3);
+        const orderedSources = [...playback.sources].sort((a, b) => {
+          const score = (source) => /tiktokcdn\.com/i.test(String(source?.url || "")) ? 10 : 0;
+          return score(b) - score(a);
+        });
         return {
           headers: {
             Referer: startUrl,
             "User-Agent": USER_AGENT,
             ...playback.cookieHeader ? { Cookie: playback.cookieHeader } : {}
           },
-          sources: playback.sources.map((source) => ({ ...source, server })),
+          sources: orderedSources.map((source) => ({ ...source, server })),
           subtitles: playback.subtitles || []
         };
       }
