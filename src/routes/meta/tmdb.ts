@@ -473,10 +473,6 @@ const resolveHdstream4uTvEpisodeId = async (
     // fall through to generic info lookup below
   }
 
-  // If no season-specific provider page matched, avoid the slow numeric-ID
-  // fallback. It cannot resolve a real HDStream episode and only adds delay.
-  if (/^\d+$/.test(targetId)) return '';
-
   const infoRes = await request.server.inject({
     method: 'GET',
     url: `/movies/hdstream4u/info?id=${encodeURIComponent(targetId)}&type=${encodeURIComponent(type || 'tv')}`,

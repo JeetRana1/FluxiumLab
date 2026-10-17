@@ -385,8 +385,6 @@ const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode, 
     }
   } catch {
   }
-  if (/^\d+$/.test(targetId))
-    return "";
   const infoRes = await request.server.inject({
     method: "GET",
     url: `/movies/hdstream4u/info?id=${encodeURIComponent(targetId)}&type=${encodeURIComponent(type || "tv")}`
