@@ -2343,27 +2343,9 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
           const candidates = extractHdstreamMovieCandidateIds(infoPayload).slice(0, 3);
 
           if (candidates.length) {
-            // Race all candidate extractions in parallel and take the first
-            // one that yields playable sources. Previously this looped
-            // sequentially with a 30s timeout per candidate (up to ~90s when
-            // the first candidates were stale); parallel racing makes the
-            // happy path return in a couple of seconds.
-            const raced = await Promise.any(
-              candidates.map(async (candidateId: string) => {
-                const payload = await withSoftTimeout(
-                  HdStream4uProvider.fetchSources(
-                    candidateId,
-                    'hdstream4u',
-                    false,
-                    { mediaId: String(id) },
-                  ),
-                  30000,
-                );
-                const sources = Array.isArray(payload?.sources) ? payload.sources : [];
-                if (!sources.length) throw new Error('no sources');
-                return payload;
-              }),
-            ).catch(() => null);
+            // Preserve the independent watch servers for player failover.
+            // A Promise.any race discarded every alternative after the winner.
+            const raced = await HdStream4uProvider.extractWatchAlternatives(candidates, 'hdstream4u');
 
             if (raced) {
               if (cacheKey && redis) {
@@ -2373,6 +2355,10 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
               }
               return reply.status(200).send(raced);
             }
+            // These are the watch links from the matched movie page. Repeating
+            // the generic matching/extraction flow only retries the same dead
+            // links until the frontend's overall request timeout expires.
+            return reply.status(502).send({ sources: [], subtitles: [], message: 'No working watch links found for this movie' });
           }
         }
       } catch {

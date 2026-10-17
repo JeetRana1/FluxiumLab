@@ -1898,23 +1898,7 @@ const routes = async (fastify, options) => {
           const infoPayload = safeJsonParse(infoRes.body || "{}");
           const candidates = extractHdstreamMovieCandidateIds(infoPayload).slice(0, 3);
           if (candidates.length) {
-            const raced = await Promise.any(
-              candidates.map(async (candidateId) => {
-                const payload = await withSoftTimeout(
-                  import_hdstream4uProvider.HdStream4uProvider.fetchSources(
-                    candidateId,
-                    "hdstream4u",
-                    false,
-                    { mediaId: String(id) }
-                  ),
-                  3e4
-                );
-                const sources = Array.isArray(payload?.sources) ? payload.sources : [];
-                if (!sources.length)
-                  throw new Error("no sources");
-                return payload;
-              })
-            ).catch(() => null);
+            const raced = await import_hdstream4uProvider.HdStream4uProvider.extractWatchAlternatives(candidates, "hdstream4u");
             if (raced) {
               if (cacheKey && import_main.redis) {
                 import_main.redis.setex(cacheKey, import_main.REDIS_TTL, JSON.stringify(raced)).catch(() => {
@@ -1922,6 +1906,7 @@ const routes = async (fastify, options) => {
               }
               return reply.status(200).send(raced);
             }
+            return reply.status(502).send({ sources: [], subtitles: [], message: "No working watch links found for this movie" });
           }
         }
       } catch {

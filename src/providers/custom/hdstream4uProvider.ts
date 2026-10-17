@@ -4,10 +4,12 @@ import vm from 'vm';
 import { createDecipheriv } from 'crypto';
 import { extractPlaybackWithPlaywright, getCachedHlsManifest, setCachedHlsManifest, acquireSharedBrowser, releaseSharedBrowser } from '../../utils/browserRuntimeExtractor';
 
-const BASE_URL = 'https://new7.hdhub4u.cl';
+const BASE_URL = 'https://new8.hdhub4u.cl';
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-const TMDB_KEY = String(process.env.TMDB_KEY || '').trim();
+// Routes import this module before main.ts loads dotenv. Read credentials at
+// request time so numeric TMDB IDs resolve under both npm start and PM2.
+const getTmdbKey = () => String(process.env.TMDB_KEY || '').trim();
 
 const STREAM_HOSTS = [
   'play4u.org',
@@ -241,9 +243,9 @@ const extractStructuredPlayer = async (url: string, server: string): Promise<any
         'Content-Type': 'application/json',
       } });
       if (typeof response.data?.streaming_url === 'string') urls = [response.data.streaming_url];
-      subtitles = (Array.isArray(response.data?.subtitles) ? response.data.subtitles : [])
-        .filter((track: any) => track.type === 0 && typeof track.file_path === 'string')
-        .map((track: any) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
+       subtitles = (Array.isArray(response.data?.subtitles) ? response.data.subtitles : [])
+         .filter((track: any) => (track.type === 0 || track.type === '0' || /subtitle|caption/i.test(String(track.type || ''))) && typeof track.file_path === 'string')
+         .map((track: any) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
     }
     const sources = await Promise.all(urls.map(async (value) => {
       const streamUrl = new URL(value, url).href;
@@ -501,6 +503,18 @@ const verifySourcePlayableState = async (
   timeoutMs = 4000,
 ): Promise<'ok' | 'dead' | 'unknown'> => {
   if (!url) return 'dead';
+  // HubStream wraps the real TikTok CDN host in `/hlsmod/<host>/...`.
+  // Probing the wrapper only proves that HubStream responds, not that the
+  // signed CDN manifest is usable by the player.
+  try {
+    const wrapped = new URL(url);
+    const match = /^\/hlsmod\/([^/]+)\/(.+)$/i.exec(wrapped.pathname);
+    if (match && /hubstream\./i.test(wrapped.hostname)) {
+      wrapped.hostname = match[1];
+      wrapped.pathname = `/${match[2]}`;
+      url = wrapped.toString();
+    }
+  } catch { return 'dead'; }
   try {
     const response = await axios.get(url, {
       timeout: timeoutMs,
@@ -1044,6 +1058,18 @@ const resolveToPlayer = async (startUrl: string, referer: string) => {
   return { playerUrl: currentUrl, referer: currentReferer, origin: safeOrigin(currentReferer) };
 };
 
+const preferBrowserCompatibleCdn = (result: any): any => {
+  if (!Array.isArray(result?.sources)) return result;
+  const sourcesWithDirectHubstreamV4 = result.sources;
+  const score = (source: any) => {
+    const url = String(source?.url || '').toLowerCase();
+    if (url.includes('/hlsmod/p16-ad-site-sign-sg.tiktokcdn.com')) return -100;
+    return url.includes('/v4/') ? 90 : url.includes('acek-cdn.com') ? 100 : url.includes('hdstream4u.com') ? 80 : url.includes('morencius.com') ? 50 : 0;
+  };
+  const sources = sourcesWithDirectHubstreamV4.filter((source: any) => !/https?:\/\/[^/]*\.97bf1\.com(?:\/|$)/i.test(String(source?.url || '')));
+  return { ...result, sources: [...(sources.length ? sources : result.sources)].sort((a, b) => score(b) - score(a)) };
+};
+
 const resolveGateWithPlaywright = async (
   startUrl: string,
   referer: string,
@@ -1296,7 +1322,7 @@ const fetchTmdbMetadata = (id: string, mediaType: string): Promise<any> => {
   return singleFlight(key, async () => {
     const cached = cache.get(key);
     if (cached) return cached;
-    const response = await axios.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${TMDB_KEY}`, {
+    const response = await axios.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${getTmdbKey()}`, {
       timeout: 15000,
       headers: { 'User-Agent': USER_AGENT },
     });
@@ -1306,7 +1332,7 @@ const fetchTmdbMetadata = (id: string, mediaType: string): Promise<any> => {
 };
 
 const resolveTmdbNumericIdToPage = async (id: string, type = 'movie'): Promise<string> => {
-  if (!/^\d+$/.test(String(id || '')) || !TMDB_KEY) return '';
+  if (!/^\d+$/.test(String(id || '')) || !getTmdbKey()) return '';
   const mediaTypes = Array.from(new Set([type === 'tv' ? 'tv' : 'movie', type === 'tv' ? 'movie' : 'tv']));
   for (const mediaType of mediaTypes) {
     try {
@@ -1342,7 +1368,7 @@ const resolveTmdbNumericIdToPage = async (id: string, type = 'movie'): Promise<s
 };
 
 const fetchTmdbBasicInfo = async (id: string, type = 'movie'): Promise<any | null> => {
-  if (!/^\d+$/.test(String(id || '')) || !TMDB_KEY) return null;
+  if (!/^\d+$/.test(String(id || '')) || !getTmdbKey()) return null;
   const mediaTypes = Array.from(new Set([type === 'tv' ? 'tv' : 'movie', type === 'tv' ? 'movie' : 'tv']));
   for (const mediaType of mediaTypes) {
     try {
@@ -1910,13 +1936,13 @@ export class HdStream4uProvider {
       // hls2 (acek-cdn) is the reliable CDN with real .ts segments.
       // hls3 (mindbodywellness.space) is a backup text-manifest mirror.
       // hls4 (morencius origin) is the legacy stream that may be ad-only.
-      // HDStream's file page also serves the packed player now. Prefer its
-      // same-origin stream, resolving relative URLs against that file page.
-      const isHdstreamFile = new URL(pageUrl).hostname === 'hdstream4u.com';
-      if (isHdstreamFile && links.hls4) pushUrl(links.hls4);
-      if (links.hls2) pushUrl(links.hls2);
-      if (links.hls3) pushUrl(links.hls3);
-      if (links.hls4) pushUrl(links.hls4);
+       // HDStream's file page also serves the packed player now. The acek CDN
+       // (hls2) is normally the fastest usable path; hls4 is a slow legacy
+       // origin and should only be a backup.
+       if (links.hls2) pushUrl(links.hls2);
+       if (links.hls3) pushUrl(links.hls3);
+       if (links.hls4) pushUrl(links.hls4);
+       const isHdstreamFile = new URL(pageUrl).hostname === 'hdstream4u.com';
 
       if (!sources.length) return null;
 
@@ -2019,7 +2045,27 @@ export class HdStream4uProvider {
   }
 
   static async extractWatchAlternatives(urls: string[], server: string): Promise<any | null> {
-    const results = await Promise.all(urls.slice(0, 4).map(async (url) => {
+    // Vidaraa often returns a syntactically valid HLS URL whose first video
+    // segment has an unsupported codec. HDStream/Morencius provides the same
+    // title with browser-compatible mirrors, so do not select Vidaraa for the
+    // HDHub4u provider's combined movie result.
+    const preferredUrls = urls.filter((url) => !/^https:\/\/vidaraa\.cc\//i.test(url));
+    const vidaraaSubtitlePromise = Promise.all(urls.filter((url) => /^https:\/\/vidaraa\.cc\/e\//i.test(url)).slice(0, 2).map(async (url) => {
+      try {
+        const parsed = new URL(url);
+        const filecode = parsed.pathname.match(/^\/e\/([A-Za-z0-9_-]+)/i)?.[1];
+        if (!filecode) return [];
+        const response = await axios.post(`${parsed.origin}/api/stream`, { filecode, device: 'web', codecs: [] }, {
+          ...requestConfig,
+          timeout: 4000,
+          headers: { ...requestConfig.headers, Referer: url, Origin: parsed.origin, 'Content-Type': 'application/json' },
+        });
+        return (Array.isArray(response.data?.subtitles) ? response.data.subtitles : [])
+          .filter((track: any) => typeof track.file_path === 'string' && (track.type === 0 || track.type === '0'))
+          .map((track: any) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
+      } catch { return []; }
+    })).then((groups) => groups.flat());
+    const results = await Promise.all(preferredUrls.slice(0, 4).map(async (url) => {
       const started = Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -2035,16 +2081,28 @@ export class HdStream4uProvider {
     const ready = results.filter((row): row is NonNullable<typeof row> => !!row)
       .sort((a, b) => a.elapsed - b.elapsed);
     if (!ready.length) return null;
+    const supplementalSubtitles = await vidaraaSubtitlePromise;
     return {
       ...ready[0].result,
+      subtitles: dedupe([
+        ...ready.flatMap(({ result }) => Array.isArray(result.subtitles) ? result.subtitles : []),
+        ...supplementalSubtitles,
+      ], (subtitle: any) => `${subtitle.lang}:${subtitle.url}`),
       sources: dedupe(ready.flatMap(({ result, url, elapsed }) => result.sources.map((source: any) => ({
         ...source,
-        server: new URL(url).hostname,
+        server: new URL(url, BASE_URL).hostname,
         referer: source.referer || result.headers?.Referer || url,
         origin: source.origin || result.headers?.Origin || '',
         cookieHeader: source.cookieHeader || result.headers?.Cookie || '',
         extractionTimeMs: elapsed,
-      }))), (source: any) => source.url),
+      }))), (source: any) => source.url)
+        .sort((a: any, b: any) => {
+          const score = (source: any) => {
+            const value = String(source?.url || '').toLowerCase();
+            return value.includes('acek-cdn.com') ? 100 : value.includes('hdstream4u.com') ? 80 : value.includes('morencius.com') ? 50 : 0;
+          };
+          return score(b) - score(a);
+        }),
     };
   }
 
@@ -2069,7 +2127,7 @@ export class HdStream4uProvider {
       _strictServer,
       options,
     );
-    const filteredResult = filterStaleHubstreamSources(this.normalizeSubtitleSources(result));
+    const filteredResult = preferBrowserCompatibleCdn(filterStaleHubstreamSources(this.normalizeSubtitleSources(result)));
     // Do not repeat a full Playwright extraction when a HubStream token is
     // dead. The browser/player can retry the returned source much faster than
     // making the API perform a second 10-15 second extraction.
@@ -2096,11 +2154,9 @@ export class HdStream4uProvider {
       const rawEpisodeId = String(episodeId || '').trim();
       let startUrl = mediaUrlFromId(rawEpisodeId || String(options.mediaId || '').trim());
 
-      // A stale file code can outlive its HDStream file while the provider's
-      // media page still contains a different, working HubStream hash.
-      if (options.mediaId && !/^https?:\/\//i.test(String(options.mediaId)) && /^[a-z0-9][a-z0-9-]{8,}$/i.test(rawEpisodeId)) {
-        startUrl = mediaUrlFromId(String(options.mediaId));
-      }
+      // Prefer the supplied file/embed code directly. Resolving the whole
+      // movie page first also fetches slow Vidaraa/HubStream alternatives and
+      // makes a valid HDStream/Morencius player wait for the slowest link.
 
 
       if (!startUrl) {
@@ -2115,8 +2171,16 @@ export class HdStream4uProvider {
       // Inventing a Morencius URL after a failed extraction caused serial waits
       // and requests for nonexistent files (e.g. Carrie's six-character iosfpa).
       if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
-        const playback = await this.extractHubstreamFast(startUrl)
-          || await extractPlaybackWithPlaywright(startUrl, BASE_URL, 12000);
+        const fastPlayback = await this.extractHubstreamFast(startUrl);
+        const fastSourceStates = fastPlayback?.sources?.length
+          ? await Promise.all(fastPlayback.sources.map((source: any) =>
+            verifySourcePlayableState(String(source?.url || ''), startUrl, 3000),
+          ))
+          : [];
+        const fastIsLive = fastPlayback?.sources?.length && fastSourceStates.some((state) => state === 'ok');
+        const playback = fastIsLive
+          ? fastPlayback
+          : await extractPlaybackWithPlaywright(startUrl, BASE_URL, 12000);
         return {
           headers: { Referer: startUrl, 'User-Agent': USER_AGENT,
             ...(playback.cookieHeader ? { Cookie: playback.cookieHeader } : {}) },
@@ -2206,38 +2270,13 @@ export class HdStream4uProvider {
           const fastEmbed = fastFile?.sources?.length
             ? fastFile
             : await this.extractMorenciusEmbedFast(fileCode, server);
-          if (fastEmbed?.sources?.length) {
-            // Verify every extracted source in parallel and drop only the
-            // definitively dead ones (hard 4xx/5xx or an invalid manifest). A
-            // probe that times out or errors ("unknown") is KEPT: the acek CDN
-            // is slow/flaky, so a hiccup must not push the whole request into
-            // the slow Playwright race. Cap each probe at half a second: the
-            // player still validates the playlist, and a slow probe is not a
-            // dead source.
-            const states = await Promise.all(
-              fastEmbed.sources.map((s: any) =>
-                verifySourcePlayableState(String(s?.url || ''), fastEmbed.headers.Referer, 500),
-              ),
-            );
-            const aliveSources: any[] = fastEmbed.sources.filter(
-              (_s: any, i: number) => states[i] !== 'dead',
-            );
-            if (aliveSources.length) {
-              return {
-                headers: {
-                  Referer: fastEmbed.headers.Referer,
-                  'User-Agent': USER_AGENT,
-                },
-                sources: aliveSources.map((s: any) => ({
-                  url: s.url,
-                  quality: s.quality || 'auto',
-                  isM3U8: s.isM3U8 || /\.m3u8/i.test(s.url),
-                  server,
-                })),
-                subtitles: fastEmbed.subtitles || [],
-              };
-            }
-          }
+           if (fastEmbed?.sources?.length) {
+             // Do not probe CDN manifests here. A slow acek response made the
+             // API wait before returning sources, even though the player can
+             // immediately try the next mirror. Keep all mirrors and let the
+             // player fail over on an actual manifest failure.
+             return fastEmbed;
+           }
           const embedUrl = `https://morencius.com/embed/${fileCode}`;
           const playbackPromise = extractPlaybackWithPlaywright(embedUrl, BASE_URL, 15000)
             .then((value) => value?.sources?.length ? { kind: 'embed', value } : Promise.reject(new Error('No embed sources')));

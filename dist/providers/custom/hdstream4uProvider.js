@@ -36,9 +36,9 @@ var import_axios = __toESM(require("axios"));
 var import_vm = __toESM(require("vm"));
 var import_crypto = require("crypto");
 var import_browserRuntimeExtractor = require("../../utils/browserRuntimeExtractor");
-const BASE_URL = "https://new7.hdhub4u.cl";
+const BASE_URL = "https://new8.hdhub4u.cl";
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
-const TMDB_KEY = String(process.env.TMDB_KEY || "").trim();
+const getTmdbKey = () => String(process.env.TMDB_KEY || "").trim();
 const STREAM_HOSTS = [
   "play4u.org",
   "vidaraa.cc",
@@ -255,7 +255,7 @@ const extractStructuredPlayer = async (url, server) => {
       } });
       if (typeof response.data?.streaming_url === "string")
         urls = [response.data.streaming_url];
-      subtitles = (Array.isArray(response.data?.subtitles) ? response.data.subtitles : []).filter((track) => track.type === 0 && typeof track.file_path === "string").map((track) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
+      subtitles = (Array.isArray(response.data?.subtitles) ? response.data.subtitles : []).filter((track) => (track.type === 0 || track.type === "0" || /subtitle|caption/i.test(String(track.type || ""))) && typeof track.file_path === "string").map((track) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
     }
     const sources = await Promise.all(urls.map(async (value) => {
       const streamUrl = new URL(value, url).href;
@@ -484,6 +484,17 @@ const verifyHubstreamSourcesLive = async (result) => {
 const verifySourcePlayableState = async (url, referer, timeoutMs = 4e3) => {
   if (!url)
     return "dead";
+  try {
+    const wrapped = new URL(url);
+    const match = /^\/hlsmod\/([^/]+)\/(.+)$/i.exec(wrapped.pathname);
+    if (match && /hubstream\./i.test(wrapped.hostname)) {
+      wrapped.hostname = match[1];
+      wrapped.pathname = `/${match[2]}`;
+      url = wrapped.toString();
+    }
+  } catch {
+    return "dead";
+  }
   try {
     const response = await import_axios.default.get(url, {
       timeout: timeoutMs,
@@ -974,6 +985,19 @@ const resolveToPlayer = async (startUrl, referer) => {
   }
   return { playerUrl: currentUrl, referer: currentReferer, origin: safeOrigin(currentReferer) };
 };
+const preferBrowserCompatibleCdn = (result) => {
+  if (!Array.isArray(result?.sources))
+    return result;
+  const sourcesWithDirectHubstreamV4 = result.sources;
+  const score = (source) => {
+    const url = String(source?.url || "").toLowerCase();
+    if (url.includes("/hlsmod/p16-ad-site-sign-sg.tiktokcdn.com"))
+      return -100;
+    return url.includes("/v4/") ? 90 : url.includes("acek-cdn.com") ? 100 : url.includes("hdstream4u.com") ? 80 : url.includes("morencius.com") ? 50 : 0;
+  };
+  const sources = sourcesWithDirectHubstreamV4.filter((source) => !/https?:\/\/[^/]*\.97bf1\.com(?:\/|$)/i.test(String(source?.url || "")));
+  return { ...result, sources: [...sources.length ? sources : result.sources].sort((a, b) => score(b) - score(a)) };
+};
 const resolveGateWithPlaywright = async (startUrl, referer, timeoutMs = 15e3) => {
   let chromium;
   try {
@@ -1195,7 +1219,7 @@ const fetchTmdbMetadata = (id, mediaType) => {
     const cached = cache.get(key);
     if (cached)
       return cached;
-    const response = await import_axios.default.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${TMDB_KEY}`, {
+    const response = await import_axios.default.get(`https://api.themoviedb.org/3/${mediaType}/${id}?api_key=${getTmdbKey()}`, {
       timeout: 15e3,
       headers: { "User-Agent": USER_AGENT }
     });
@@ -1205,7 +1229,7 @@ const fetchTmdbMetadata = (id, mediaType) => {
   });
 };
 const resolveTmdbNumericIdToPage = async (id, type = "movie") => {
-  if (!/^\d+$/.test(String(id || "")) || !TMDB_KEY)
+  if (!/^\d+$/.test(String(id || "")) || !getTmdbKey())
     return "";
   const mediaTypes = Array.from(/* @__PURE__ */ new Set([type === "tv" ? "tv" : "movie", type === "tv" ? "movie" : "tv"]));
   for (const mediaType of mediaTypes) {
@@ -1237,7 +1261,7 @@ const resolveTmdbNumericIdToPage = async (id, type = "movie") => {
   return "";
 };
 const fetchTmdbBasicInfo = async (id, type = "movie") => {
-  if (!/^\d+$/.test(String(id || "")) || !TMDB_KEY)
+  if (!/^\d+$/.test(String(id || "")) || !getTmdbKey())
     return null;
   const mediaTypes = Array.from(/* @__PURE__ */ new Set([type === "tv" ? "tv" : "movie", type === "tv" ? "movie" : "tv"]));
   for (const mediaType of mediaTypes) {
@@ -1707,15 +1731,13 @@ class HdStream4uProvider {
           });
         }
       };
-      const isHdstreamFile = new URL(pageUrl).hostname === "hdstream4u.com";
-      if (isHdstreamFile && links.hls4)
-        pushUrl(links.hls4);
       if (links.hls2)
         pushUrl(links.hls2);
       if (links.hls3)
         pushUrl(links.hls3);
       if (links.hls4)
         pushUrl(links.hls4);
+      const isHdstreamFile = new URL(pageUrl).hostname === "hdstream4u.com";
       if (!sources.length)
         return null;
       const subtitles = links.subtitles.map((t) => ({
@@ -1810,7 +1832,24 @@ class HdStream4uProvider {
     );
   }
   static async extractWatchAlternatives(urls, server) {
-    const results = await Promise.all(urls.slice(0, 4).map(async (url) => {
+    const preferredUrls = urls.filter((url) => !/^https:\/\/vidaraa\.cc\//i.test(url));
+    const vidaraaSubtitlePromise = Promise.all(urls.filter((url) => /^https:\/\/vidaraa\.cc\/e\//i.test(url)).slice(0, 2).map(async (url) => {
+      try {
+        const parsed = new URL(url);
+        const filecode = parsed.pathname.match(/^\/e\/([A-Za-z0-9_-]+)/i)?.[1];
+        if (!filecode)
+          return [];
+        const response = await import_axios.default.post(`${parsed.origin}/api/stream`, { filecode, device: "web", codecs: [] }, {
+          ...requestConfig,
+          timeout: 4e3,
+          headers: { ...requestConfig.headers, Referer: url, Origin: parsed.origin, "Content-Type": "application/json" }
+        });
+        return (Array.isArray(response.data?.subtitles) ? response.data.subtitles : []).filter((track) => typeof track.file_path === "string" && (track.type === 0 || track.type === "0")).map((track) => ({ url: absoluteUrl(track.file_path, url), lang: cleanTrackLabel(track.language) }));
+      } catch {
+        return [];
+      }
+    })).then((groups) => groups.flat());
+    const results = await Promise.all(preferredUrls.slice(0, 4).map(async (url) => {
       const started = Date.now();
       let timer;
       try {
@@ -1833,16 +1872,27 @@ class HdStream4uProvider {
     const ready = results.filter((row) => !!row).sort((a, b) => a.elapsed - b.elapsed);
     if (!ready.length)
       return null;
+    const supplementalSubtitles = await vidaraaSubtitlePromise;
     return {
       ...ready[0].result,
+      subtitles: dedupe([
+        ...ready.flatMap(({ result }) => Array.isArray(result.subtitles) ? result.subtitles : []),
+        ...supplementalSubtitles
+      ], (subtitle) => `${subtitle.lang}:${subtitle.url}`),
       sources: dedupe(ready.flatMap(({ result, url, elapsed }) => result.sources.map((source) => ({
         ...source,
-        server: new URL(url).hostname,
+        server: new URL(url, BASE_URL).hostname,
         referer: source.referer || result.headers?.Referer || url,
         origin: source.origin || result.headers?.Origin || "",
         cookieHeader: source.cookieHeader || result.headers?.Cookie || "",
         extractionTimeMs: elapsed
-      }))), (source) => source.url)
+      }))), (source) => source.url).sort((a, b) => {
+        const score = (source) => {
+          const value = String(source?.url || "").toLowerCase();
+          return value.includes("acek-cdn.com") ? 100 : value.includes("hdstream4u.com") ? 80 : value.includes("morencius.com") ? 50 : 0;
+        };
+        return score(b) - score(a);
+      })
     };
   }
   static async fetchSourcesUnshared(episodeId, server, _strictServer, options) {
@@ -1859,7 +1909,7 @@ class HdStream4uProvider {
       _strictServer,
       options
     );
-    const filteredResult = filterStaleHubstreamSources(this.normalizeSubtitleSources(result));
+    const filteredResult = preferBrowserCompatibleCdn(filterStaleHubstreamSources(this.normalizeSubtitleSources(result)));
     const verifiedResult = await verifyHubstreamSourcesLive(filteredResult);
     if (verifiedResult?.sources?.length) {
       cache.set(cacheKey, verifiedResult, 5 * 60 * 1e3);
@@ -1871,9 +1921,6 @@ class HdStream4uProvider {
     try {
       const rawEpisodeId = String(episodeId || "").trim();
       let startUrl = mediaUrlFromId(rawEpisodeId || String(options.mediaId || "").trim());
-      if (options.mediaId && !/^https?:\/\//i.test(String(options.mediaId)) && /^[a-z0-9][a-z0-9-]{8,}$/i.test(rawEpisodeId)) {
-        startUrl = mediaUrlFromId(String(options.mediaId));
-      }
       if (!startUrl) {
         return { error: "episodeId is required" };
       }
@@ -1881,7 +1928,12 @@ class HdStream4uProvider {
         return await extractStructuredPlayer(startUrl, server) || { sources: [], subtitles: [], error: "Player did not return a valid HLS manifest" };
       }
       if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
-        const playback = await this.extractHubstreamFast(startUrl) || await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 12e3);
+        const fastPlayback = await this.extractHubstreamFast(startUrl);
+        const fastSourceStates = fastPlayback?.sources?.length ? await Promise.all(fastPlayback.sources.map(
+          (source) => verifySourcePlayableState(String(source?.url || ""), startUrl, 3e3)
+        )) : [];
+        const fastIsLive = fastPlayback?.sources?.length && fastSourceStates.some((state) => state === "ok");
+        const playback = fastIsLive ? fastPlayback : await (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(startUrl, BASE_URL, 12e3);
         return {
           headers: {
             Referer: startUrl,
@@ -1951,29 +2003,7 @@ class HdStream4uProvider {
         );
         const fastEmbed = fastFile?.sources?.length ? fastFile : await this.extractMorenciusEmbedFast(fileCode, server);
         if (fastEmbed?.sources?.length) {
-          const states = await Promise.all(
-            fastEmbed.sources.map(
-              (s) => verifySourcePlayableState(String(s?.url || ""), fastEmbed.headers.Referer, 500)
-            )
-          );
-          const aliveSources = fastEmbed.sources.filter(
-            (_s, i) => states[i] !== "dead"
-          );
-          if (aliveSources.length) {
-            return {
-              headers: {
-                Referer: fastEmbed.headers.Referer,
-                "User-Agent": USER_AGENT
-              },
-              sources: aliveSources.map((s) => ({
-                url: s.url,
-                quality: s.quality || "auto",
-                isM3U8: s.isM3U8 || /\.m3u8/i.test(s.url),
-                server
-              })),
-              subtitles: fastEmbed.subtitles || []
-            };
-          }
+          return fastEmbed;
         }
         const embedUrl = `https://morencius.com/embed/${fileCode}`;
         const playbackPromise = (0, import_browserRuntimeExtractor.extractPlaybackWithPlaywright)(embedUrl, BASE_URL, 15e3).then((value) => value?.sources?.length ? { kind: "embed", value } : Promise.reject(new Error("No embed sources")));
