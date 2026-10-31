@@ -2,9 +2,11 @@ import { FastifyRequest, FastifyReply, FastifyInstance, RegisterOptions } from '
 import { PROVIDERS_LIST } from '@consumet/extensions';
 
 import hdstream4u from './hdstream4u';
+import play4u from './play4u';
 
 const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
   await fastify.register(hdstream4u, { prefix: '/hdstream4u' });
+  await fastify.register(play4u, { prefix: '/play4u' });
 
   fastify.get('/', async (request: any, reply: any) => {
     reply.status(200).send('Welcome to Consumet Movies and TV Shows');

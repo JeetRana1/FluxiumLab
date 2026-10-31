@@ -4,7 +4,7 @@ import vm from 'vm';
 import { createDecipheriv } from 'crypto';
 import { extractPlaybackWithPlaywright, getCachedHlsManifest, setCachedHlsManifest, acquireSharedBrowser, releaseSharedBrowser } from '../../utils/browserRuntimeExtractor';
 
-const BASE_URL = 'https://new8.hdhub4u.cl';
+const BASE_URL = 'https://new10.hdhub4u.cl';
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 // Routes import this module before main.ts loads dotenv. Read credentials at
@@ -233,6 +233,8 @@ const extractStructuredPlayer = async (url: string, server: string): Promise<any
       const payload = JSON.parse(json);
       if (!payload.ok || !Array.isArray(payload.streams)) return null;
       urls = payload.streams.map((stream: any) => stream?.m3u8_url).filter((value: any) => typeof value === 'string');
+       subtitles = normalizeDecodedSubtitlePayload(payload, url);
+       subtitles.push(...extractSubtitles(html, url));
     } else {
       const filecode = /^\/e\/([A-Za-z0-9_-]+)\/?$/.exec(parsed.pathname)?.[1];
       if (!filecode) return null;
@@ -252,12 +254,28 @@ const extractStructuredPlayer = async (url: string, server: string): Promise<any
       if (!/^https?:\/\//i.test(streamUrl)) return null;
       const manifest = await fetchText(streamUrl, url, 4000);
       if (!manifest.trimStart().startsWith('#EXTM3U')) return null;
+      if (parsed.hostname === 'play4u.org') {
+        // These VOD subtitle playlists contain one full-length WebVTT file.
+        // Expose it directly so the external caption renderer can load cues
+        // independently of HLS fragment scheduling.
+        const tracks = manifest.split('\n').filter(line => /^#EXT-X-MEDIA:.*TYPE=SUBTITLES/i.test(line));
+        const resolved = await Promise.all(tracks.map(async line => {
+          const uri = /URI="([^"]+)"/.exec(line)?.[1];
+          if (!uri) return null;
+          const playlistUrl = new URL(uri, streamUrl).href;
+          const playlist = await fetchText(playlistUrl, url, 8000);
+          const files = playlist.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+          if (!playlist.trimStart().startsWith('#EXTM3U') || files.length !== 1) return null;
+          return { url: new URL(files[0], playlistUrl).href, lang: /NAME="([^"]+)"/.exec(line)?.[1] || 'English', referer: url };
+        }).map(promise => promise.catch(() => null)));
+        subtitles.push(...resolved.filter((track): track is NonNullable<typeof track> => track !== null));
+      }
       return { url: streamUrl, quality: 'auto', isM3U8: true, server };
     }).map((promise) => promise.catch(() => null)));
     const valid = sources.filter(Boolean);
-    return valid.length ? {
-      headers: { Referer: url, Origin: parsed.origin, 'User-Agent': USER_AGENT },
-      sources: valid, subtitles,
+     return valid.length ? {
+       headers: { Referer: url, Origin: parsed.origin, 'User-Agent': USER_AGENT },
+       sources: valid, subtitles,
     } : null;
   } catch {
     return null;
@@ -2019,9 +2037,18 @@ export class HdStream4uProvider {
       for (const [key, value] of Object.entries(tiktok?.params || {})) {
         manifest.searchParams.set(key, String(value));
       }
-      const body = await fetchText(manifest.href, `${page.origin}/`, 4000);
-      if (!body.trimStart().startsWith('#EXTM3U')) return null;
-      setCachedHlsManifest(manifest.href, body, 'application/vnd.apple.mpegurl');
+      // Warm the master playlist without delaying source extraction. The
+      // first player request can then use the shared HLS cache.
+      void fetchText(manifest.href, `${page.origin}/`, 8000)
+        .then(body => {
+          if (body.trimStart().startsWith('#EXTM3U')) {
+            setCachedHlsManifest(manifest.href, body, 'application/vnd.apple.mpegurl');
+          }
+        })
+        .catch(() => undefined);
+       // Return the signed manifest immediately. The player/proxy will fetch
+       // and cache the playlist; blocking extraction here adds another CDN
+       // round trip before playback can even begin.
       const subtitles = Object.entries(payload.subtitle || {}).flatMap(([lang, value]) => {
         if (typeof value !== 'string') return [];
         const url = absoluteUrl(value, page.origin).replace(/#.*$/, '');
@@ -2128,6 +2155,9 @@ export class HdStream4uProvider {
       options,
     );
     const filteredResult = preferBrowserCompatibleCdn(filterStaleHubstreamSources(this.normalizeSubtitleSources(result)));
+    if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(String(episodeId || ''))) {
+      return filteredResult;
+    }
     // Do not repeat a full Playwright extraction when a HubStream token is
     // dead. The browser/player can retry the returned source much faster than
     // making the API perform a second 10-15 second extraction.
@@ -2172,13 +2202,7 @@ export class HdStream4uProvider {
       // and requests for nonexistent files (e.g. Carrie's six-character iosfpa).
       if (/^https?:\/\/(?:[^.]+\.)*hubstream\.(?:art|pw|cc|ink|foo|boo)\/#/i.test(startUrl)) {
         const fastPlayback = await this.extractHubstreamFast(startUrl);
-        const fastSourceStates = fastPlayback?.sources?.length
-          ? await Promise.all(fastPlayback.sources.map((source: any) =>
-            verifySourcePlayableState(String(source?.url || ''), startUrl, 3000),
-          ))
-          : [];
-        const fastIsLive = fastPlayback?.sources?.length && fastSourceStates.some((state) => state === 'ok');
-        const playback = fastIsLive
+        const playback = fastPlayback?.sources?.length
           ? fastPlayback
           : await extractPlaybackWithPlaywright(startUrl, BASE_URL, 12000);
         const orderedSources = [...playback.sources].sort((a: any, b: any) => {
@@ -2237,6 +2261,23 @@ export class HdStream4uProvider {
                   : { ok: false, hubLink, value: null },
               )
               .catch(() => ({ ok: false, hubLink, value: null }));
+          }
+          // HubStream hashes now resolve through the lightweight API path and
+          // are typically ready before the legacy file/embed extractors. Use
+          // that result immediately instead of waiting on their race.
+          if (hubPlaybackPromise && hubLink) {
+            const hubResult = await hubPlaybackPromise;
+            if (hubResult?.value?.sources?.length) {
+              return {
+                headers: {
+                  Referer: hubLink,
+                  'User-Agent': USER_AGENT,
+                  ...(hubResult.value.cookieHeader ? { Cookie: hubResult.value.cookieHeader } : {}),
+                },
+                sources: hubResult.value.sources.map((source: any) => ({ ...source, server })),
+                subtitles: hubResult.value.subtitles || [],
+              };
+            }
           }
           if (directLink || hubLink) {
             startUrl = directLink || hubLink || startUrl;

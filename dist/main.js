@@ -379,8 +379,8 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     }
   };
   const isHubstreamSignedCdn = (u) => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(u.hostname) && /^\/v4\//.test(u.pathname);
-  const rewriteHlsManifest = (manifest, manifestUrl, referer, baseUrl) => {
-    const resolveAndProxy = (value, isSegment = false) => {
+  const rewriteHlsManifest = (manifest, manifestUrl, referer, baseUrl, subtitleManifest = false) => {
+    const resolveAndProxy = (value, isSegment = false, isSubtitle = false, isSubtitlePlaylist = false) => {
       const trimmed = String(value || "").trim();
       if (!trimmed)
         return trimmed;
@@ -395,12 +395,16 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
             }
           }
         }
-        return buildProxyPath(
+        const proxied = buildProxyPath(
           resolved.toString(),
           upstreamReferer,
           isSegment,
           baseUrl
         );
+        let result = isSubtitle ? appendQueryParam(proxied, "subtitle", "1") : proxied;
+        if (isSubtitlePlaylist)
+          result = appendQueryParam(result, "subtitlePlaylist", "1");
+        return result;
       } catch {
         return trimmed;
       }
@@ -410,7 +414,10 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       const binaryResource = /^#EXT-X-(?:KEY|SESSION-KEY|MAP):/i.test(line.trim());
       return line.replace(
         /URI=(["'])(.*?)\1/g,
-        (_match, quote, uri) => `URI=${quote}${resolveAndProxy(uri, binaryResource)}${quote}`
+        (_match, quote, uri) => {
+          const isSubtitle = /TYPE=SUBTITLES/i.test(line);
+          return `URI=${quote}${resolveAndProxy(uri, binaryResource, isSubtitle, isSubtitle)}${quote}`;
+        }
       );
     }).join("\n");
     let previousTag = "";
@@ -424,10 +431,10 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       }
       if (/^(data:|blob:)/i.test(trimmed))
         return line;
-      const isSubtitleResource = /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed) || !/^https:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl) && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed);
+      const isSubtitleResource = subtitleManifest || /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed) || !/^https:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl) && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed);
       const isSegment = /^#EXTINF\b/i.test(previousTag) && !isSubtitleResource;
       previousTag = "";
-      return resolveAndProxy(trimmed, isSegment);
+      return resolveAndProxy(trimmed, isSegment, isSubtitleResource);
     }).join("\n");
     if (!/(?:shiora|mikora|norami|akirax)\.|morencius\.com/i.test(manifestUrl) && !/^https?:\/\/(?:[^/]+\.)?hdstream4u\.com\//i.test(manifestUrl) && !/^https?:\/\/hubstream\.(?:art|pw|cc|ink|foo|boo)\/hlsmod\//i.test(manifestUrl)) {
       output = output.replace(
@@ -435,7 +442,9 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         ""
       );
     }
-    output = output.split("\n").filter((line) => !/^#EXT-X-MEDIA:/i.test(line) || !/TYPE=SUBTITLES/i.test(line)).join("\n");
+    if (!/^https?:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl)) {
+      output = output.split("\n").filter((line) => !/^#EXT-X-MEDIA:/i.test(line) || !/TYPE=SUBTITLES/i.test(line)).join("\n");
+    }
     return output;
   };
   const isLikelyHlsManifest = (body, contentType) => {
@@ -470,7 +479,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       return true;
     return /\/(?:hls|oppai)\//i.test(url);
   };
-  const fetchHlsResource = async (url, isManifest, incomingRange, referer, cookieHeader, signal) => {
+  const fetchHlsResource = async (url, isManifest, incomingRange, referer, cookieHeader, signal, isSubtitle = false) => {
     const isAnimeSaltCdn = /^https?:\/\/(?:as-cdn\d+|z\d+)\.(?:top|ac|pro|xyz|click|link|net|cc|org)\//i.test(url);
     const isIbyteCdn = /^https?:\/\/[^/]*\.ibyteimg\.com\//i.test(url);
     const isTikTokCdn = /^https?:\/\/[^/]*\.tiktokcdn\.com\//i.test(url);
@@ -535,7 +544,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                   ...cookieHeader ? { Cookie: cookieHeader } : {},
                   ...incomingRange ? { Range: incomingRange } : {},
-                  ...isManifest ? {} : { Accept: "video/mp2t,video/mp4,application/octet-stream,*/*" },
+                  ...isManifest ? {} : { Accept: isSubtitle ? "text/vtt,text/plain,application/javascript,*/*" : "video/mp2t,video/mp4,application/octet-stream,*/*" },
                   ...isManifest ? {} : { "Accept-Encoding": "identity" }
                 },
                 timeout: isAcekCdn ? 25e3 : isIbyteCdn ? 3e4 : isHubstreamCdn && !isManifest ? HUBSTREAM_SEGMENT_TIMEOUT_MS : 15e3,
@@ -615,17 +624,21 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
   };
   fastify.get("/proxy/hls/*", async (request, reply) => {
     const rawRequestUrl = String(request.url || "");
+    const externalSubtitles = new URL(rawRequestUrl, "http://localhost").searchParams.get("externalSubtitles") === "1";
+    const stripExternalSubtitles = (body) => externalSubtitles ? body.split("\n").filter((line) => !/^#EXT-X-MEDIA:.*TYPE=SUBTITLES/i.test(line)).map((line) => line.replace(/,SUBTITLES="[^"]*"/g, "")).join("\n") : body;
     const [rawPath, rawQuery = ""] = rawRequestUrl.split("?");
     const wildcardPath = rawPath.replace(/^\/proxy\/hls\//i, "").trim();
     const refererParam = String(
       new URLSearchParams(rawQuery).get("referer") || ""
     ).trim();
     const cookieParam = String(new URLSearchParams(rawQuery).get("cookie") || "").trim();
+    const subtitleParam = String(new URLSearchParams(rawQuery).get("subtitle") || "").trim() === "1";
+    const subtitlePlaylistParam = String(new URLSearchParams(rawQuery).get("subtitlePlaylist") || "").trim() === "1";
     const segmentParam = String(new URLSearchParams(rawQuery).get("segment") || "").trim() === "1";
-    const passthroughQuery = rawQuery.split("&").filter((part) => part && !/^(referer|segment|cookie)=/i.test(part)).join("&");
+    const passthroughQuery = rawQuery.split("&").filter((part) => part && !/^(referer|segment|cookie|subtitle|subtitlePlaylist|externalSubtitles)=/i.test(part)).join("&");
     const url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ""}`;
     const incomingRange = String(request.headers.range || "");
-    const isManifest = !segmentParam && shouldTreatAsManifestRequest(url, incomingRange);
+    const isManifest = !segmentParam && (subtitlePlaylistParam || !subtitleParam && shouldTreatAsManifestRequest(url, incomingRange));
     const abortController = new AbortController();
     reply.raw.on("close", () => {
       if (!reply.raw.writableEnded) {
@@ -644,11 +657,11 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         const { getCachedHlsManifest } = await import("./utils/browserRuntimeExtractor");
         const cached = getCachedHlsManifest(url);
         if (cached) {
-          const content = rewriteHlsManifest(cached.body, url, requestReferer, `${request.protocol}://${request.headers.host || "localhost:3000"}`);
+          const content = rewriteHlsManifest(cached.body, url, requestReferer, `${request.protocol}://${request.headers.host || "localhost:3000"}`, subtitleParam);
           reply.header("Content-Type", cached.contentType || "application/vnd.apple.mpegurl");
           reply.header("Access-Control-Allow-Origin", "*");
           reply.header("Cache-Control", "public, max-age=60");
-          return reply.send(content);
+          return reply.send(stripExternalSubtitles(content));
         }
       } catch {
       }
@@ -666,13 +679,23 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       }
     }
     try {
-      const response = await fetchHlsResource(
+      const response = subtitleParam && !isManifest ? await import_axios.default.get(url, {
+        headers: {
+          Referer: requestReferer,
+          Accept: "text/vtt,text/plain,application/javascript,*/*",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36"
+        },
+        responseType: "arraybuffer",
+        timeout: 15e3,
+        signal: abortController.signal
+      }) : await fetchHlsResource(
         url,
         isManifest,
         incomingRange,
         requestReferer,
         cookieParam,
-        abortController.signal
+        abortController.signal,
+        subtitleParam
       );
       const responseContentType = String(response.headers["content-type"] || "");
       const responseBuffer = Buffer.isBuffer(response.data) ? response.data : response.data instanceof ArrayBuffer ? Buffer.from(response.data) : ArrayBuffer.isView(response.data) ? Buffer.from(
@@ -687,7 +710,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         const hostHeader = request.headers.host || "localhost:3000";
         const protocol = request.headers["x-forwarded-proto"] || request.protocol || "https";
         const baseUrl = `${protocol}://${hostHeader}`;
-        const content = rewriteHlsManifest(responseText, url, requestReferer, baseUrl);
+        const content = rewriteHlsManifest(responseText, url, requestReferer, baseUrl, subtitleParam);
         const hasMediaUri = content.split("\n").some((line) => line.trim() && !line.trim().startsWith("#"));
         if (!hasMediaUri && !/(?:shiora|mikora|norami|akirax)\./i.test(url)) {
           return reply.code(502).send({ error: "Upstream HLS manifest contains no media segments" });
@@ -699,7 +722,27 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
           "Content-Type, Authorization, Range"
         );
         reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
-        return reply.send(content);
+        return reply.send(stripExternalSubtitles(content));
+      }
+      if (subtitleParam) {
+        const subtitleStream = response.data;
+        const subtitleContent = subtitleStream && typeof subtitleStream[Symbol.asyncIterator] === "function" ? Buffer.concat(
+          await (async () => {
+            const chunks = [];
+            for await (const chunk of subtitleStream) {
+              chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+            }
+            return chunks;
+          })()
+        ).toString("utf8") : responseText;
+        reply.header("Content-Type", "text/vtt; charset=utf-8");
+        reply.header("Access-Control-Allow-Origin", "*");
+        reply.header(
+          "Access-Control-Allow-Headers",
+          "Content-Type, Authorization, Range"
+        );
+        reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
+        return reply.send(subtitleContent);
       }
       const upstreamStream = response.data;
       if (upstreamStream && typeof upstreamStream.pipe === "function") {

@@ -33,8 +33,10 @@ __export(movies_exports, {
 module.exports = __toCommonJS(movies_exports);
 var import_extensions = require("@consumet/extensions");
 var import_hdstream4u = __toESM(require("./hdstream4u"));
+var import_play4u = __toESM(require("./play4u"));
 const routes = async (fastify, options) => {
   await fastify.register(import_hdstream4u.default, { prefix: "/hdstream4u" });
+  await fastify.register(import_play4u.default, { prefix: "/play4u" });
   fastify.get("/", async (request, reply) => {
     reply.status(200).send("Welcome to Consumet Movies and TV Shows");
   });
