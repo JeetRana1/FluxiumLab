@@ -533,7 +533,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
          // follow an EXTINF line in the manifest, but must not receive the
          // segment marker or the HLS proxy will fetch them as media bytes.
           const isSubtitleResource = subtitleManifest || /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed)
-           || (!/^https:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl)
+            || (!/^https:\/\/play4u\.org(?:\/|$)/i.test(referer || '') && !/^https:\/\/(?:[^/]+\.)?(?:uprising\.best|gothamnet\.vip|neopulse\.vip)\//i.test(manifestUrl)
              && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed));
          const isSegment = /^#EXTINF\b/i.test(previousTag) && !isSubtitleResource;
         previousTag = '';
@@ -599,7 +599,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     if (incomingRange) return false;
     // Play4u uses image extensions for both master and variant playlists.
     // Actual media/key requests are explicitly marked segment=1 by the rewriter.
-    if (/^https:\/\/(?:[^/]+\.)?uprising\.best\/range\//i.test(url)) return true;
+    if (/^https:\/\/(?:[^/]+\.)?(?:uprising\.best|gothamnet\.vip|neopulse\.vip)\/range\//i.test(url)) return true;
     if (/(?:ok\.ru|okcdn\.ru)\/.*\/video\//i.test(url)) return true;
     return /\/(?:hls|oppai)\//i.test(url);
   };
@@ -870,7 +870,8 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ''}`;
     const incomingRange = String(request.headers.range || '');
     const isManifest = !segmentParam && (
-      subtitlePlaylistParam || (!subtitleParam && shouldTreatAsManifestRequest(url, incomingRange))
+      subtitlePlaylistParam || (!subtitleParam && (shouldTreatAsManifestRequest(url, incomingRange)
+        || (!incomingRange && /^https:\/\/play4u\.org(?:\/|$)/i.test(refererParam) && new URL(url).pathname.startsWith('/range/'))))
     );
 
     // Abort upstream fetches as soon as the client goes away (pausing, seeking
@@ -909,7 +910,14 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         const { getCachedHlsManifest } = await import('./utils/browserRuntimeExtractor');
         const cached = getCachedHlsManifest(url);
         if (cached) {
-           const content = rewriteHlsManifest(cached.body, url, requestReferer, `${request.protocol}://${request.headers.host || 'localhost:3000'}`, subtitleParam);
+           const cachedBaseUrl = `${request.protocol}://${request.headers.host || 'localhost:3000'}`;
+           let content = rewriteHlsManifest(cached.body, url, requestReferer, cachedBaseUrl, subtitleParam);
+           if (/^https:\/\/(?:[^/]+\.)?gothamnet\.vip\/range\//i.test(url)) {
+             const proxyRangeBase = `${cachedBaseUrl}/proxy/hls/${new URL(url).host}/range/`;
+             content = content
+               .replace(/(["'=])\/range\//g, `$1${proxyRangeBase}`)
+               .replace(/^\/range\//gm, proxyRangeBase);
+           }
           reply.header('Content-Type', cached.contentType || 'application/vnd.apple.mpegurl');
           reply.header('Access-Control-Allow-Origin', '*');
           reply.header('Cache-Control', 'public, max-age=60');
@@ -983,7 +991,13 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         const hostHeader = request.headers.host || 'localhost:3000';
         const protocol = request.headers['x-forwarded-proto'] || request.protocol || 'https';
         const baseUrl = `${protocol}://${hostHeader}`;
-         const content = rewriteHlsManifest(responseText, url, requestReferer, baseUrl, subtitleParam);
+          let content = rewriteHlsManifest(responseText, url, requestReferer, baseUrl, subtitleParam);
+          if (/^https:\/\/(?:[^/]+\.)?gothamnet\.vip\/range\//i.test(url)) {
+            const proxyRangeBase = `${baseUrl}/proxy/hls/${new URL(url).host}/range/`;
+            content = content
+              .replace(/(["'=])\/range\//g, `$1${proxyRangeBase}`)
+              .replace(/^\/range\//gm, proxyRangeBase);
+          }
 
         // Some Megaplay tokens currently return an ad-only playlist. After
         // removing those ad entries, fail it so the player can try a fallback

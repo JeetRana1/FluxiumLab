@@ -44,12 +44,12 @@ const absolute = (value) => new URL(value, BASE_URL).href;
 const tmdbKey = () => String(process.env.TMDB_KEY || "").trim();
 const infoCache = /* @__PURE__ */ new Map();
 const INFO_CACHE_TTL = 10 * 60 * 1e3;
-const resolveImdbId = async (id) => {
+const resolveImdbId = async (id, mediaType) => {
   if (/^tt\d+$/i.test(id))
     return id;
   if (!/^\d+$/.test(id) || !tmdbKey())
     return "";
-  for (const type of ["tv", "movie"]) {
+  for (const type of [mediaType === "tv" ? "tv" : "movie"]) {
     try {
       const response = await import_axios.default.get(`https://api.themoviedb.org/3/${type}/${id}/external_ids`, {
         params: { api_key: tmdbKey() },
@@ -129,7 +129,7 @@ class Play4uProvider {
       return cached.value;
     let url = /^https?:\/\//i.test(id) ? id : "";
     if (!url) {
-      const imdbId2 = await resolveImdbId(id);
+      const imdbId2 = await resolveImdbId(id, type);
       if (imdbId2) {
         const candidates = type === "tv" ? [`${BASE_URL}/series/${imdbId2}`, `${BASE_URL}/movie/${imdbId2}`] : [`${BASE_URL}/watch/${imdbId2}`, `${BASE_URL}/movie/${imdbId2}`, `${BASE_URL}/series/${imdbId2}`];
         for (const candidate of candidates) {

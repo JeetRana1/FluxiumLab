@@ -11,8 +11,24 @@ const USER_AGENT =
 // request time so numeric TMDB IDs resolve under both npm start and PM2.
 const getTmdbKey = () => String(process.env.TMDB_KEY || '').trim();
 
+const unsealPlay4uUrl = (value: unknown): string => {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith('pa!~')) return raw;
+  try {
+    const encoded = raw.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+    const padded = encoded + '='.repeat((4 - (encoded.length % 4)) % 4);
+    const bytes = Buffer.from(padded, 'base64');
+    const key = Buffer.from('pa4u-stream-seal-v1', 'utf8');
+    for (let i = 0; i < bytes.length; i += 1) bytes[i] ^= key[i % key.length];
+    return bytes.toString('utf8');
+  } catch {
+    return '';
+  }
+};
+
 const STREAM_HOSTS = [
   'play4u.org',
+  'playdrive.vip',
   'vidaraa.cc',
   'hubstream.art',
   'hubstream.pw',
@@ -222,17 +238,19 @@ const fetchText = async (url: string, referer = BASE_URL, timeout = requestConfi
 // needed. Play4u deliberately serves HLS under image-looking URL extensions.
 const extractStructuredPlayer = async (url: string, server: string): Promise<any | null> => {
   const parsed = new URL(url);
-  if (!['play4u.org', 'vidaraa.cc'].includes(parsed.hostname)) return null;
+  if (!['play4u.org', 'playdrive.vip', 'vidaraa.cc'].includes(parsed.hostname)) return null;
   try {
     let urls: string[] = [];
     let subtitles: Array<{ url: string; lang: string }> = [];
-    if (parsed.hostname === 'play4u.org') {
+    if (parsed.hostname === 'play4u.org' || parsed.hostname === 'playdrive.vip') {
       const html = await fetchText(url, BASE_URL, 8000);
       const json = /window\.__PA_PLAY__\s*=\s*(\{[^\n]+\})\s*;/.exec(html)?.[1];
       if (!json) return null;
       const payload = JSON.parse(json);
       if (!payload.ok || !Array.isArray(payload.streams)) return null;
-      urls = payload.streams.map((stream: any) => stream?.m3u8_url).filter((value: any) => typeof value === 'string');
+      urls = payload.streams
+        .map((stream: any) => unsealPlay4uUrl(stream?.m3u8_url))
+        .filter(Boolean);
        subtitles = normalizeDecodedSubtitlePayload(payload, url);
        subtitles.push(...extractSubtitles(html, url));
     } else {
@@ -694,6 +712,7 @@ const extractEpisodeWatchEntries = (
     const episodeNo = Number(match[1] || 0);
     const block = String(match[0] || '');
     if (!Number.isFinite(episodeNo) || episodeNo <= 0) continue;
+    const playdriveCandidate = block.match(/https:\/\/playdrive\.vip\/e\/[A-Za-z0-9_-]+(?:\/s-\d+\/ep-\d+)?/i)?.[0] || '';
     const candidates = [...block.matchAll(/https:\/\/(?:hdstream4u(?:\.com|\.in)\/file\/[A-Za-z0-9_-]+|morencius\.com\/file\/[A-Za-z0-9_-]+|watchhd\.upns\.live\/#[A-Za-z0-9_-]+|hubstream\.art\/#[A-Za-z0-9_-]+|greenmountmotors\.com\/\?id=[^"'\s<>]+|callistanise\.com\/file\/[A-Za-z0-9_-]+|gadgetsweb\.xyz\/\?id=[^"'\s<>]+|hubcdn\.sbs\/file\/[A-Za-z0-9_-]+)/gi)]
       .map((row) => String(row[0] || '').trim())
       .filter(Boolean);
@@ -707,10 +726,11 @@ const extractEpisodeWatchEntries = (
       candidates.find((url) => /greenmountmotors\.com\/\?id=/i.test(url)) ||
       candidates.find((url) => /gadgetsweb\.xyz\/\?id=/i.test(url)) ||
       candidates[0];
-    if (!preferred) continue;
+     if (playdriveCandidate) candidates.unshift(playdriveCandidate);
+     if (!preferred && !playdriveCandidate) continue;
     entries.push({
       number: episodeNo,
-      url: preferred,
+       url: playdriveCandidate || preferred,
       title: `Episode ${episodeNo}`,
     });
   }
@@ -2193,7 +2213,7 @@ export class HdStream4uProvider {
         return { error: 'episodeId is required' };
       }
 
-      if (['play4u.org', 'vidaraa.cc'].includes(new URL(startUrl).hostname)) {
+      if (['play4u.org', 'playdrive.vip', 'vidaraa.cc'].includes(new URL(startUrl).hostname)) {
         return await extractStructuredPlayer(startUrl, server) || { sources: [], subtitles: [], error: 'Player did not return a valid HLS manifest' };
       }
 

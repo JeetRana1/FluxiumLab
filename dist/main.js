@@ -431,7 +431,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       }
       if (/^(data:|blob:)/i.test(trimmed))
         return line;
-      const isSubtitleResource = subtitleManifest || /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed) || !/^https:\/\/(?:[^/]+\.)?uprising\.best\//i.test(manifestUrl) && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed);
+      const isSubtitleResource = subtitleManifest || /\.(?:vtt|srt|ass)(?:\?|$)/i.test(trimmed) || !/^https:\/\/play4u\.org(?:\/|$)/i.test(referer || "") && !/^https:\/\/(?:[^/]+\.)?(?:uprising\.best|gothamnet\.vip|neopulse\.vip)\//i.test(manifestUrl) && /(?:\/p\/|\.js(?:\?|$))/i.test(trimmed);
       const isSegment = /^#EXTINF\b/i.test(previousTag) && !isSubtitleResource;
       previousTag = "";
       return resolveAndProxy(trimmed, isSegment, isSubtitleResource);
@@ -473,7 +473,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       return true;
     if (incomingRange)
       return false;
-    if (/^https:\/\/(?:[^/]+\.)?uprising\.best\/range\//i.test(url))
+    if (/^https:\/\/(?:[^/]+\.)?(?:uprising\.best|gothamnet\.vip|neopulse\.vip)\/range\//i.test(url))
       return true;
     if (/(?:ok\.ru|okcdn\.ru)\/.*\/video\//i.test(url))
       return true;
@@ -638,7 +638,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const passthroughQuery = rawQuery.split("&").filter((part) => part && !/^(referer|segment|cookie|subtitle|subtitlePlaylist|externalSubtitles)=/i.test(part)).join("&");
     const url = `https://${wildcardPath}${passthroughQuery ? `?${passthroughQuery}` : ""}`;
     const incomingRange = String(request.headers.range || "");
-    const isManifest = !segmentParam && (subtitlePlaylistParam || !subtitleParam && shouldTreatAsManifestRequest(url, incomingRange));
+    const isManifest = !segmentParam && (subtitlePlaylistParam || !subtitleParam && (shouldTreatAsManifestRequest(url, incomingRange) || !incomingRange && /^https:\/\/play4u\.org(?:\/|$)/i.test(refererParam) && new URL(url).pathname.startsWith("/range/")));
     const abortController = new AbortController();
     reply.raw.on("close", () => {
       if (!reply.raw.writableEnded) {
@@ -657,7 +657,12 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         const { getCachedHlsManifest } = await import("./utils/browserRuntimeExtractor");
         const cached = getCachedHlsManifest(url);
         if (cached) {
-          const content = rewriteHlsManifest(cached.body, url, requestReferer, `${request.protocol}://${request.headers.host || "localhost:3000"}`, subtitleParam);
+          const cachedBaseUrl = `${request.protocol}://${request.headers.host || "localhost:3000"}`;
+          let content = rewriteHlsManifest(cached.body, url, requestReferer, cachedBaseUrl, subtitleParam);
+          if (/^https:\/\/(?:[^/]+\.)?gothamnet\.vip\/range\//i.test(url)) {
+            const proxyRangeBase = `${cachedBaseUrl}/proxy/hls/${new URL(url).host}/range/`;
+            content = content.replace(/(["'=])\/range\//g, `$1${proxyRangeBase}`).replace(/^\/range\//gm, proxyRangeBase);
+          }
           reply.header("Content-Type", cached.contentType || "application/vnd.apple.mpegurl");
           reply.header("Access-Control-Allow-Origin", "*");
           reply.header("Cache-Control", "public, max-age=60");
@@ -710,7 +715,11 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         const hostHeader = request.headers.host || "localhost:3000";
         const protocol = request.headers["x-forwarded-proto"] || request.protocol || "https";
         const baseUrl = `${protocol}://${hostHeader}`;
-        const content = rewriteHlsManifest(responseText, url, requestReferer, baseUrl, subtitleParam);
+        let content = rewriteHlsManifest(responseText, url, requestReferer, baseUrl, subtitleParam);
+        if (/^https:\/\/(?:[^/]+\.)?gothamnet\.vip\/range\//i.test(url)) {
+          const proxyRangeBase = `${baseUrl}/proxy/hls/${new URL(url).host}/range/`;
+          content = content.replace(/(["'=])\/range\//g, `$1${proxyRangeBase}`).replace(/^\/range\//gm, proxyRangeBase);
+        }
         const hasMediaUri = content.split("\n").some((line) => line.trim() && !line.trim().startsWith("#"));
         if (!hasMediaUri && !/(?:shiora|mikora|norami|akirax)\./i.test(url)) {
           return reply.code(502).send({ error: "Upstream HLS manifest contains no media segments" });
