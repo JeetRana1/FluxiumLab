@@ -1582,11 +1582,16 @@ export class HdStream4uProvider {
           $('meta[property="og:description"]').attr('content') ||
           $('.entry-content p, .post-content p, article p').first().text(),
       );
-      const lateEpisodeWatchEntries = [...html.matchAll(/EPiSODE\s*(\d+)[\s\S]*?https:\/\/vidaraa\.cc\/e\/[A-Za-z0-9_-]+/gi)].map((match) => ({
-        number: Number(match[1] || 0),
-        url: String(match[0].match(/https:\/\/vidaraa\.cc\/e\/[A-Za-z0-9_-]+/i)?.[0] || ''),
-        title: `Episode ${Number(match[1] || 0)}`,
-      })).filter((entry) => entry.number > 0 && entry.url);
+      const lateEpisodeWatchEntries = [...html.matchAll(/https:\/\/vidaraa\.cc\/e\/[A-Za-z0-9_-]+/gi)].map((match) => {
+        const before = html.slice(0, Number(match.index || 0));
+        const episodeMarkers = [...before.matchAll(/EPiSODE\s*(\d+)/gi)];
+        const number = Number(episodeMarkers.at(-1)?.[1] || 0);
+        return {
+          number,
+          url: String(match[0] || ''),
+          title: `Episode ${number}`,
+        };
+      }).filter((entry) => entry.number > 0 && entry.url);
       const episodeWatchEntries = dedupe(
         [...extractEpisodeWatchEntries(html), ...lateEpisodeWatchEntries],
         (entry) => `${entry.number}:${entry.url}`,

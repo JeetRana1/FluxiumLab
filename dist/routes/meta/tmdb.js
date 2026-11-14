@@ -399,13 +399,18 @@ const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode, 
     const value = Number(entry?.seasonNumber ?? entry?.season ?? 1);
     return Number.isFinite(value) && value > 0 ? value : 1;
   };
-  const match = entries.find(
-    (entry) => !isBonusEntry(entry) && getEntrySeason(entry) === requestedSeason && Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode
-  );
   const normalizeEpisodeId = (entry) => {
     const raw = String(entry?.episodeId || entry?.url || entry?.id || "").trim();
     return raw;
   };
+  const match = entries.find(
+    (entry) => !isBonusEntry(entry) && getEntrySeason(entry) === requestedSeason && Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode
+  );
+  if (String(id || "").trim() === "262838" && requestedSeason === 2 && requestedEpisode === 8) {
+    const correctedEpisode = entries.find((entry) => String(entry?.episodeId || entry?.url || entry?.id || "").includes("s32iukrdsw48"));
+    if (correctedEpisode)
+      return normalizeEpisodeId(correctedEpisode);
+  }
   if (match)
     return normalizeEpisodeId(match);
   const episodeOnlyMatches = numberedEntries.filter(

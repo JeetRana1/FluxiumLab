@@ -94,7 +94,9 @@ const HDSTREAM_SPECIAL_BONUS_OVERRIDES = {
     token: "ucp5r8",
     label: "Netflix Special: Varun Dhawan",
     seasonName: "Netflix Special",
-    category: "netflix-special"
+    category: "netflix-special",
+    youtubeToken: "s32iukrdsw48",
+    youtubeLabel: "YouTube Exclusive: Episode 8"
   }
 };
 class SimpleCache {
@@ -1448,7 +1450,20 @@ class HdStream4uProvider {
       const description = cleanText(
         String(tmdbInfo?.overview || "") || $('meta[property="og:description"]').attr("content") || $(".entry-content p, .post-content p, article p").first().text()
       );
-      const episodeWatchEntries = extractEpisodeWatchEntries(html);
+      const lateEpisodeWatchEntries = [...html.matchAll(/https:\/\/vidaraa\.cc\/e\/[A-Za-z0-9_-]+/gi)].map((match) => {
+        const before = html.slice(0, Number(match.index || 0));
+        const episodeMarkers = [...before.matchAll(/EPiSODE\s*(\d+)/gi)];
+        const number = Number(episodeMarkers.at(-1)?.[1] || 0);
+        return {
+          number,
+          url: String(match[0] || ""),
+          title: `Episode ${number}`
+        };
+      }).filter((entry) => entry.number > 0 && entry.url);
+      const episodeWatchEntries = dedupe(
+        [...extractEpisodeWatchEntries(html), ...lateEpisodeWatchEntries],
+        (entry) => `${entry.number}:${entry.url}`
+      );
       const bonusLinkEntries = $("a").toArray().flatMap((anchor) => {
         const label = cleanText($(anchor).text());
         const href = absoluteUrl(String($(anchor).attr("href") || ""), pageUrl);
@@ -1493,6 +1508,25 @@ class HdStream4uProvider {
               seasonNameOverride: specialOverride.seasonName,
               categoryOverride: specialOverride.category
             });
+          }
+        }
+        if (specialOverride.youtubeToken) {
+          const youtubeIndex = episodes.findIndex(
+            (episode) => `${episode?.id || ""} ${episode?.url || ""}`.includes(specialOverride.youtubeToken)
+          );
+          if (youtubeIndex >= 0) {
+            const [youtubeEpisode] = episodes.splice(youtubeIndex, 1);
+            if (youtubeEpisode) {
+              bonusEpisodes.push({
+                id: youtubeEpisode.id,
+                title: specialOverride.youtubeLabel || `YouTube Exclusive: Episode ${youtubeEpisode.number}`,
+                number: youtubeEpisode.number,
+                url: youtubeEpisode.url,
+                isBonus: true,
+                seasonNameOverride: "YouTube Exclusive",
+                categoryOverride: "youtube-exclusive"
+              });
+            }
           }
         }
       }
