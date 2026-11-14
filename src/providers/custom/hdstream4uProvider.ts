@@ -68,12 +68,14 @@ const RAW_FILE_HOSTS = ['r2.dev', 'googleusercontent.com', 'acek-cdn.com', 'mind
 // as EPISODE 6, which shifts the real EP6/Rakhi episode down to EPISODE 7 on the
 // page). These overrides move such rows out of the numbered list into a dedicated
 // bonus category so TMDB SxEy numbering stays intact. Key: hdstream page media-id.
-const HDSTREAM_SPECIAL_BONUS_OVERRIDES: Record<string, { token: string; label: string; seasonName: string; category: string }> = {
+const HDSTREAM_SPECIAL_BONUS_OVERRIDES: Record<string, { token: string; label: string; seasonName: string; category: string; youtubeToken?: string; youtubeLabel?: string }> = {
   'indias-got-latent-season-2-hindi-webrip-all-episodes': {
     token: 'ucp5r8',
     label: 'Netflix Special: Varun Dhawan',
     seasonName: 'Netflix Special',
     category: 'netflix-special',
+    youtubeToken: 's32iukrdsw48',
+    youtubeLabel: 'YouTube Exclusive: Episode 8',
   },
 };
 
@@ -1580,7 +1582,15 @@ export class HdStream4uProvider {
           $('meta[property="og:description"]').attr('content') ||
           $('.entry-content p, .post-content p, article p').first().text(),
       );
-      const episodeWatchEntries = extractEpisodeWatchEntries(html);
+      const lateEpisodeWatchEntries = [...html.matchAll(/EPiSODE\s*(\d+)[\s\S]*?https:\/\/vidaraa\.cc\/e\/[A-Za-z0-9_-]+/gi)].map((match) => ({
+        number: Number(match[1] || 0),
+        url: String(match[0].match(/https:\/\/vidaraa\.cc\/e\/[A-Za-z0-9_-]+/i)?.[0] || ''),
+        title: `Episode ${Number(match[1] || 0)}`,
+      })).filter((entry) => entry.number > 0 && entry.url);
+      const episodeWatchEntries = dedupe(
+        [...extractEpisodeWatchEntries(html), ...lateEpisodeWatchEntries],
+        (entry) => `${entry.number}:${entry.url}`,
+      );
       const bonusLinkEntries = $('a').toArray().flatMap((anchor) => {
         const label = cleanText($(anchor).text());
         const href = absoluteUrl(String($(anchor).attr('href') || ''), pageUrl);
@@ -1643,6 +1653,25 @@ export class HdStream4uProvider {
               seasonNameOverride: specialOverride.seasonName,
               categoryOverride: specialOverride.category,
             });
+          }
+        }
+        if (specialOverride.youtubeToken) {
+          const youtubeIndex = episodes.findIndex((episode) =>
+            `${episode?.id || ''} ${episode?.url || ''}`.includes(specialOverride.youtubeToken as string),
+          );
+          if (youtubeIndex >= 0) {
+            const [youtubeEpisode] = episodes.splice(youtubeIndex, 1);
+            if (youtubeEpisode) {
+              bonusEpisodes.push({
+                id: youtubeEpisode.id,
+                title: specialOverride.youtubeLabel || `YouTube Exclusive: Episode ${youtubeEpisode.number}`,
+                number: youtubeEpisode.number,
+                url: youtubeEpisode.url,
+                isBonus: true,
+                seasonNameOverride: 'YouTube Exclusive',
+                categoryOverride: 'youtube-exclusive',
+              });
+            }
           }
         }
       }
