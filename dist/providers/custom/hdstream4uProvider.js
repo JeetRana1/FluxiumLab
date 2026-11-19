@@ -36,7 +36,8 @@ var import_axios = __toESM(require("axios"));
 var import_vm = __toESM(require("vm"));
 var import_crypto = require("crypto");
 var import_browserRuntimeExtractor = require("../../utils/browserRuntimeExtractor");
-const BASE_URL = "https://new10.hdhub4u.cl";
+let BASE_URL = "https://new15.hdhub4u.cl";
+let baseUrlExpiresAt = 0;
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const getTmdbKey = () => String(process.env.TMDB_KEY || "").trim();
 const unsealPlay4uUrl = (value) => {
@@ -203,14 +204,44 @@ const absoluteUrl = (url, base = BASE_URL) => {
     return "";
   try {
     const parsed = new URL(raw, base);
-    if (/^(?:new\d+\.)?hdhub4u\.[a-z]{2,}$/i.test(parsed.hostname)) {
-      parsed.protocol = "https:";
-      parsed.hostname = new URL(BASE_URL).hostname;
-    }
     return parsed.toString();
   } catch {
     return raw;
   }
+};
+const setBaseUrlFromInput = (value) => {
+  try {
+    const hostname = new URL(value).hostname;
+    if (/^new\d+\.hdhub4u\.[a-z]{2,}$/i.test(hostname)) {
+      BASE_URL = `https://${hostname}`;
+      baseUrlExpiresAt = Date.now() + 15 * 60 * 1e3;
+    }
+  } catch {
+  }
+};
+const discoverBaseUrl = async () => {
+  if (Date.now() < baseUrlExpiresAt)
+    return BASE_URL;
+  const candidates = Array.from({ length: 40 }, (_, index) => `https://new${40 - index}.hdhub4u.cl`);
+  const results = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      const response = await import_axios.default.get(`${candidate}/`, {
+        ...requestConfig,
+        timeout: 2500,
+        responseType: "text"
+      });
+      const body = String(response.data || "");
+      if (response.status < 400 && /hdhub|hdstream|indias\s*got/i.test(body))
+        return candidate;
+    } catch {
+    }
+    return "";
+  }));
+  const found = results.find(Boolean);
+  if (found)
+    BASE_URL = found;
+  baseUrlExpiresAt = Date.now() + 15 * 60 * 1e3;
+  return BASE_URL;
 };
 const mediaIdFromUrl = (url) => {
   const absolute = absoluteUrl(url);
@@ -693,7 +724,7 @@ const extractEpisodeWatchEntries = (html) => {
     entries.push({
       number: episodeNo,
       url: playdriveCandidate || preferred,
-      title: `Episode ${episodeNo}`
+      title: cleanText(cheerio.load(block).text()) || `Episode ${episodeNo}`
     });
   }
   return dedupe(entries, (item) => `${item.number}:${item.url}`).sort((a, b) => a.number - b.number);
@@ -1320,6 +1351,7 @@ class HdStream4uProvider {
   static async searchUnshared(query, page) {
     if (!query)
       return { error: "Query is required" };
+    await discoverBaseUrl();
     const cacheKey = `hdstream4u:search:${query}:${page}`;
     const cached = cache.get(cacheKey);
     if (cached)
@@ -1415,6 +1447,9 @@ class HdStream4uProvider {
   static async fetchMediaInfoUnshared(id, type) {
     if (!id)
       return { error: "id is required" };
+    setBaseUrlFromInput(id);
+    if (!/^https?:\/\//i.test(id))
+      await discoverBaseUrl();
     try {
       const originalId = String(id || "").trim();
       const tmdbInfoPromise = /^\d+$/.test(originalId) ? fetchTmdbBasicInfo(originalId, type) : Promise.resolve(null);

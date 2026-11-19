@@ -393,7 +393,7 @@ const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode, 
     return "";
   const payload = safeJsonParse(infoRes.body || "{}");
   const entries = Array.isArray(payload?.episodes) ? payload.episodes : [];
-  const isBonusEntry = (entry) => String(entry?.category || "").toLowerCase() === "bonus" || Number(entry?.seasonNumber) === 0 || /bonus/i.test(String(entry?.seasonName || entry?.title || ""));
+  const isBonusEntry = (entry) => String(entry?.category || "").toLowerCase() === "bonus" || Number(entry?.seasonNumber) === 0 || /bonus|nf\s*exclusive|yt\s*exclusive|netflix\s*special|youtube\s*exclusive/i.test(String(entry?.seasonName || entry?.title || ""));
   const numberedEntries = entries.filter((entry) => !isBonusEntry(entry));
   const getEntrySeason = (entry) => {
     const value = Number(entry?.seasonNumber ?? entry?.season ?? 1);
@@ -406,13 +406,17 @@ const resolveHdstream4uTvEpisodeId = async (request, id, type, season, episode, 
   const match = entries.find(
     (entry) => !isBonusEntry(entry) && getEntrySeason(entry) === requestedSeason && Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode
   );
+  const directMatch = entries.find(
+    (entry) => !isBonusEntry(entry) && getEntrySeason(entry) === requestedSeason && Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === requestedEpisode && !(String(id || "").trim() === "262838" && requestedSeason === 2 && requestedEpisode >= 6)
+  );
+  const resolvedMatch = directMatch || match;
   if (String(id || "").trim() === "262838" && requestedSeason === 2 && requestedEpisode === 8) {
     const correctedEpisode = entries.find((entry) => String(entry?.episodeId || entry?.url || entry?.id || "").includes("s32iukrdsw48"));
     if (correctedEpisode)
       return normalizeEpisodeId(correctedEpisode);
   }
-  if (match)
-    return normalizeEpisodeId(match);
+  if (resolvedMatch)
+    return normalizeEpisodeId(resolvedMatch);
   const episodeOnlyMatches = numberedEntries.filter(
     (entry) => Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode
   );

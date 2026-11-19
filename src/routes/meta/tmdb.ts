@@ -483,7 +483,7 @@ const resolveHdstream4uTvEpisodeId = async (
   const isBonusEntry = (entry: any): boolean =>
     String(entry?.category || '').toLowerCase() === 'bonus' ||
     Number(entry?.seasonNumber) === 0 ||
-    /bonus/i.test(String(entry?.seasonName || entry?.title || ''));
+    /bonus|nf\s*exclusive|yt\s*exclusive|netflix\s*special|youtube\s*exclusive/i.test(String(entry?.seasonName || entry?.title || ''));
   const numberedEntries = entries.filter((entry: any) => !isBonusEntry(entry));
   const getEntrySeason = (entry: any): number => {
     const value = Number(entry?.seasonNumber ?? entry?.season ?? 1);
@@ -501,11 +501,19 @@ const resolveHdstream4uTvEpisodeId = async (
       getEntrySeason(entry) === requestedSeason &&
       Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === shiftedEpisode,
   );
+  const directMatch = entries.find(
+    (entry: any) =>
+      !isBonusEntry(entry) &&
+      getEntrySeason(entry) === requestedSeason &&
+      Number(entry?.episodeNumber || entry?.episode || entry?.number || 0) === requestedEpisode &&
+      !(String(id || '').trim() === '262838' && requestedSeason === 2 && requestedEpisode >= 6),
+  );
+  const resolvedMatch = directMatch || match;
   if (String(id || '').trim() === '262838' && requestedSeason === 2 && requestedEpisode === 8) {
     const correctedEpisode = entries.find((entry: any) => String(entry?.episodeId || entry?.url || entry?.id || '').includes('s32iukrdsw48'));
     if (correctedEpisode) return normalizeEpisodeId(correctedEpisode);
   }
-  if (match) return normalizeEpisodeId(match);
+  if (resolvedMatch) return normalizeEpisodeId(resolvedMatch);
 
   // Bonus episodes are intentionally NOT resolved here. The frontend surfaces
   // them in a dedicated Bonus tab and plays them through the provider's direct
