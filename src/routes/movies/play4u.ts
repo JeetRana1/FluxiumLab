@@ -3,6 +3,10 @@ import { Play4uProvider } from '../../providers/custom/play4uProvider';
 
 const routes = async (fastify: FastifyInstance, _options: RegisterOptions) => {
   fastify.get('/', (_, reply) => reply.send({ intro: 'Play4u provider', routes: ['/search', '/info', '/watch'] }));
+  fastify.get('/latest', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { page } = request.query as { page?: number };
+    return reply.send(await Play4uProvider.latest(page || 1));
+  });
   fastify.get('/search', async (request: FastifyRequest, reply: FastifyReply) => {
     const { query, page } = request.query as { query?: string; page?: number };
     if (!query) return reply.code(400).send({ error: 'query is required' });

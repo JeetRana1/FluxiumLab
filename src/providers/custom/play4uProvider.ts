@@ -14,6 +14,39 @@ const tmdbKey = () => String(process.env.TMDB_KEY || '').trim();
 const infoCache = new Map<string, { expires: number; value: any }>();
 const INFO_CACHE_TTL = 10 * 60 * 1000;
 
+const enrichLatestItem = async (item: any) => {
+  if (!item?.imdbId || !tmdbKey()) return item;
+  try {
+    const response = await axios.get(`https://api.themoviedb.org/3/find/${item.imdbId}`, {
+      params: { api_key: tmdbKey(), external_source: 'imdb_id' },
+      timeout: 8000,
+    });
+    const match = response.data?.tv_results?.[0] || response.data?.movie_results?.[0];
+    if (!match?.id) return item;
+    const isTv = Boolean(response.data?.tv_results?.[0]);
+    return {
+      ...item,
+      id: String(match.id),
+      tmdbId: String(match.id),
+      title: match.title || match.name || item.title,
+      name: match.name || match.title || item.name,
+      type: isTv ? 'tv' : 'movie',
+      poster_path: match.poster_path || '',
+      backdrop_path: match.backdrop_path || '',
+      image: match.poster_path ? `https://image.tmdb.org/t/p/w500${match.poster_path}` : item.image,
+      poster: match.poster_path ? `https://image.tmdb.org/t/p/w500${match.poster_path}` : item.poster,
+      vote_average: Number(match.vote_average || 0),
+      vote_count: Number(match.vote_count || 0),
+      release_date: match.release_date || '',
+      first_air_date: match.first_air_date || '',
+      overview: match.overview || '',
+      play4uUrl: item.url,
+    };
+  } catch {
+    return item;
+  }
+};
+
 const resolveImdbId = async (id: string, mediaType: string) => {
   if (/^tt\d+$/i.test(id)) return id;
   if (!/^\d+$/.test(id) || !tmdbKey()) return '';
@@ -59,6 +92,32 @@ const parseEpisodes = ($: cheerio.CheerioAPI, url: string) => {
 };
 
 export class Play4uProvider {
+  static async latest(page = 1) {
+    const html = await fetchPage(`${BASE_URL}/?cat=latest${page > 1 ? `&page=${page}` : ''}`);
+    const $ = cheerio.load(html);
+    const results = $('article.poster-card').toArray().map((el) => {
+      const item = parseCard($, el);
+      if (!item) return null;
+      const href = String(item.id || '');
+      const imdbId = href.match(/\/(?:watch|series)\/(tt\d+)/i)?.[1] || '';
+      const rawQuality = String($(el).attr('data-quality') || '').trim().toLowerCase();
+      const camTitle = /\b(?:cam\s*v?\d*|camrip|hdcam|hdts|telesync|telecine|ts)\b/i.test(
+        `${item.title} ${$(el).attr('data-search') || ''}`,
+      );
+      return {
+        ...item,
+        provider: 'play4u',
+        isNew: true,
+        isPlay4uLatest: true,
+        quality: camTitle || rawQuality.includes('cam') ? 'CAM' : 'HD',
+        imdbId,
+      };
+    }).filter(Boolean);
+    const enrichedResults = await Promise.all(results.map(enrichLatestItem));
+    const totalPages = Number($('.row-count').text().match(/of\s+(\d+)/i)?.[1] || 0);
+    return { currentPage: page, totalPages: totalPages > 0 ? Math.ceil(totalPages / Math.max(1, enrichedResults.length)) : 1, results: enrichedResults };
+  }
+
   static async search(query: string, page = 1) {
     if (/^(?:tt\d+|\d+)$/.test(query.trim())) {
       try {
@@ -146,6 +205,25 @@ export class Play4uProvider {
   }
 
   static async fetchSources(episodeId: string, server = 'play4u') {
+    // Play4u's current watch pages expose the working PlayDrive player in
+    // __PA_PLAY__. The old HDStream resolver can return a stale neopulse
+    // document instead of an HLS manifest, which causes HLS.js to fail.
+    if (/play4u\.org\/watch\//i.test(String(episodeId))) {
+      try {
+        const html = await fetchPage(episodeId);
+        const embedMatch = html.match(/["']embed_url["']\s*:\s*["'](https?:\/\/[^"']+)["']/i);
+        const embedUrl = embedMatch?.[1]?.replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+        if (embedUrl) {
+          return {
+            headers: { Referer: episodeId, Origin: BASE_URL },
+            sources: [{ url: embedUrl, quality: 'auto', isEmbed: true, server: 'play4u' }],
+            subtitles: [],
+          };
+        }
+      } catch (_) {
+        // Fall through to the legacy resolver if the watch page is unavailable.
+      }
+    }
     return HdStream4uProvider.fetchSources(episodeId, server);
   }
 }

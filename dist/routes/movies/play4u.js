@@ -24,6 +24,10 @@ module.exports = __toCommonJS(play4u_exports);
 var import_play4uProvider = require("../../providers/custom/play4uProvider");
 const routes = async (fastify, _options) => {
   fastify.get("/", (_, reply) => reply.send({ intro: "Play4u provider", routes: ["/search", "/info", "/watch"] }));
+  fastify.get("/latest", async (request, reply) => {
+    const { page } = request.query;
+    return reply.send(await import_play4uProvider.Play4uProvider.latest(page || 1));
+  });
   fastify.get("/search", async (request, reply) => {
     const { query, page } = request.query;
     if (!query)
