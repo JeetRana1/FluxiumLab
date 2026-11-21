@@ -10,6 +10,18 @@ const headers = {
 
 const fetchPage = async (url: string) => String((await axios.get(url, { headers, timeout: 15000 })).data || '');
 const absolute = (value: string) => new URL(value, BASE_URL).href;
+const decodePlay4uStream = (token: string) => {
+  const raw = String(token || '').trim();
+  if (!raw.startsWith('pa!~')) return '';
+  const encoded = raw.slice(4).replace(/-/g, '+').replace(/_/g, '/');
+  const bytes = Buffer.from(encoded, 'base64');
+  const key = 'pa4u-stream-seal-v1';
+  let decoded = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    decoded += String.fromCharCode(bytes[i] ^ key.charCodeAt(i % key.length));
+  }
+  return /^https?:\/\/[^"'\\\s]+/i.test(decoded) ? decoded : '';
+};
 const tmdbKey = () => String(process.env.TMDB_KEY || '').trim();
 const infoCache = new Map<string, { expires: number; value: any }>();
 const INFO_CACHE_TTL = 10 * 60 * 1000;
@@ -211,13 +223,49 @@ export class Play4uProvider {
     if (/play4u\.org\/watch\//i.test(String(episodeId))) {
       try {
         const html = await fetchPage(episodeId);
-        const embedMatch = html.match(/["']embed_url["']\s*:\s*["'](https?:\/\/[^"']+)["']/i);
-        const embedUrl = embedMatch?.[1]?.replace(/\\u0026/g, '&').replace(/\\\//g, '/');
-        if (embedUrl) {
+        const streamMatch = html.match(/["'](?:m3u8_url|video_url)["']\s*:\s*["'](pa!~[^"']+)["']/i);
+        const directStream = decodePlay4uStream(streamMatch?.[1] || '');
+        if (directStream) {
+          let subtitles: Array<{ url: string; src: string; label: string; srclang: string; provider: string; referer: string }> = [];
+          try {
+            const manifest = String((await axios.get(directStream, {
+              headers: { ...headers, Referer: episodeId },
+              timeout: 10000,
+            })).data || '');
+            const subtitlePlaylists = [...manifest.matchAll(
+              /#EXT-X-MEDIA:TYPE=SUBTITLES[^#]*?NAME="([^"]+)"[^#]*?LANGUAGE="([^"]*)"[^#]*?URI="([^"]+)"/gi,
+            )];
+            subtitles = await Promise.all(subtitlePlaylists.map(async (match) => {
+              const playlistUrl = new URL(match[3], directStream).href;
+              let src = playlistUrl;
+              try {
+                const playlist = String((await axios.get(playlistUrl, {
+                  headers: { ...headers, Referer: episodeId },
+                  timeout: 10000,
+                })).data || '');
+                const segment = playlist.split(/\r?\n/)
+                  .map((line) => line.trim())
+                  .find((line) => line && !line.startsWith('#'));
+                if (segment) src = new URL(segment, playlistUrl).href;
+              } catch (_) {
+                // Keep the playlist URL as a fallback.
+              }
+              return {
+                url: src,
+                src,
+                label: match[1],
+                srclang: match[2] || 'en',
+                provider: 'play4u',
+                referer: episodeId,
+              };
+            }));
+          } catch (_) {
+            // The HLS source remains playable if its subtitle manifest is unavailable.
+          }
           return {
             headers: { Referer: episodeId, Origin: BASE_URL },
-            sources: [{ url: embedUrl, quality: 'auto', isEmbed: true, server: 'play4u' }],
-            subtitles: [],
+            sources: [{ url: directStream, quality: 'auto', isM3U8: true, server: 'play4u' }],
+            subtitles,
           };
         }
       } catch (_) {
