@@ -200,7 +200,35 @@ export class Play4uProvider {
     const title = String($('h1, .detail-title, .title').first().text() || $('meta[property="og:title"]').attr('content') || '').trim();
     const tmdbId = String(html.match(/"tmdb_id"\s*:\s*(\d+)/i)?.[1] || '').trim();
     const imdbId = String(html.match(/"imdb_id"\s*:\s*"(tt\d+)"/i)?.[1] || '').trim();
-    const episodes = parseEpisodes($, url);
+    let episodes = parseEpisodes($, url);
+    // Series landing pages expose one season-directory link per season
+    // (for example /s-01/ep-01), not the actual episode list. Hydrate those
+    // season pages so consumers receive real episode URLs instead of treating
+    // the directory marker as Season 1 Episode 1.
+    const seasonMarkers = episodes.filter((episode: any) =>
+      /^S\d+\s*[-:]\s*Season\b/i.test(String(episode?.title || '')),
+    );
+    if (seasonMarkers.length) {
+      const hydrated: any[] = [];
+      for (const marker of seasonMarkers) {
+        try {
+          const seasonHtml = await fetchPage(String(marker.id));
+          hydrated.push(...parseEpisodes(cheerio.load(seasonHtml), String(marker.id)));
+        } catch { /* keep the landing-page data if a season page fails */ }
+      }
+      // Remove the landing-page markers before merging. If they remain in
+      // the array, Map keeps the marker for (season, episode) 1 and discards
+      // the hydrated real S01E01/S02E01 URL.
+      const landingEpisodes = episodes.filter((episode: any) =>
+        !/^S\d+\s*[-:]\s*Season\b/i.test(String(episode?.title || '')),
+      );
+      const merged = [...landingEpisodes, ...hydrated];
+      episodes = [...new Map(merged.map((episode: any) =>
+        [`${episode.season}:${episode.episode}`, episode],
+      )).values()].sort((a: any, b: any) =>
+        a.season - b.season || a.episode - b.episode,
+      );
+    }
     const firstEpisode = episodes[0];
     const result = {
       id: url,

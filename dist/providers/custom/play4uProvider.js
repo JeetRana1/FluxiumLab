@@ -246,7 +246,29 @@ class Play4uProvider {
     const title = String($("h1, .detail-title, .title").first().text() || $('meta[property="og:title"]').attr("content") || "").trim();
     const tmdbId = String(html.match(/"tmdb_id"\s*:\s*(\d+)/i)?.[1] || "").trim();
     const imdbId = String(html.match(/"imdb_id"\s*:\s*"(tt\d+)"/i)?.[1] || "").trim();
-    const episodes = parseEpisodes($, url);
+    let episodes = parseEpisodes($, url);
+    const seasonMarkers = episodes.filter(
+      (episode) => /^S\d+\s*[-:]\s*Season\b/i.test(String(episode?.title || ""))
+    );
+    if (seasonMarkers.length) {
+      const hydrated = [];
+      for (const marker of seasonMarkers) {
+        try {
+          const seasonHtml = await fetchPage(String(marker.id));
+          hydrated.push(...parseEpisodes(cheerio.load(seasonHtml), String(marker.id)));
+        } catch {
+        }
+      }
+      const landingEpisodes = episodes.filter(
+        (episode) => !/^S\d+\s*[-:]\s*Season\b/i.test(String(episode?.title || ""))
+      );
+      const merged = [...landingEpisodes, ...hydrated];
+      episodes = [...new Map(merged.map(
+        (episode) => [`${episode.season}:${episode.episode}`, episode]
+      )).values()].sort(
+        (a, b) => a.season - b.season || a.episode - b.episode
+      );
+    }
     const firstEpisode = episodes[0];
     const result = {
       id: url,
