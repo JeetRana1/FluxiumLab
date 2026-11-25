@@ -54,6 +54,21 @@ const decodePlay4uStream = (token) => {
   }
   return /^https?:\/\/[^"'\\\s]+/i.test(decoded) ? decoded : "";
 };
+const extractPlay4uSkipSegments = (html) => {
+  const match = String(html || "").match(/window\.__PA_SKIP__\s*=\s*(\{[\s\S]*?\})\s*;/i);
+  if (!match?.[1])
+    return [];
+  try {
+    const payload = JSON.parse(match[1]);
+    return (Array.isArray(payload?.items) ? payload.items : []).map((item) => ({
+      type: String(item?.type || "").toLowerCase(),
+      start: Number(item?.start),
+      end: item?.end == null ? void 0 : Number(item.end)
+    })).filter((item) => ["recap", "intro", "credits", "outro"].includes(item.type) && Number.isFinite(item.start) && (item.end == null || Number.isFinite(item.end)) && (item.end == null || item.end > item.start));
+  } catch (_) {
+    return [];
+  }
+};
 const tmdbKey = () => String(process.env.TMDB_KEY || "").trim();
 const infoCache = /* @__PURE__ */ new Map();
 const INFO_CACHE_TTL = 10 * 60 * 1e3;
@@ -118,7 +133,21 @@ const parseCard = ($, el) => {
   const poster = String(link.find("img").attr("src") || "").trim();
   if (!href || !title)
     return null;
-  return { id: absolute(href), url: absolute(href), title, name: title, year, image: poster, poster, type: href.includes("/series/") ? "tv" : "movie" };
+  const badgeText = String(card.find(".poster-badges .badge-chip").toArray().map((node) => $(node).text().trim()).find((text) => text && !/^(?:[a-z]{2,3})(?:\s*[·,]\s*[a-z]{2,3})*$/i.test(text)) || "").trim();
+  const episodeLabel = String(card.find(".badge-new-ep").first().text() || "").trim() || (/^S\d+\s*EP\d+$/i.test(badgeText) ? badgeText : "");
+  const seasonLabel = String(card.find(".badge-season").first().text() || "").trim() || (badgeText && !episodeLabel ? badgeText : "");
+  return {
+    id: absolute(href),
+    url: absolute(href),
+    title,
+    name: title,
+    year,
+    image: poster,
+    poster,
+    type: href.includes("/series/") ? "tv" : "movie",
+    latestLabel: episodeLabel || seasonLabel || "",
+    latestKind: episodeLabel ? "episode" : seasonLabel ? "season" : ""
+  };
 };
 const parseEpisodes = ($, url) => {
   const episodes = $('a[href*="/s-"][href*="/ep-"]').toArray().map((node) => {
@@ -284,12 +313,13 @@ class Play4uProvider {
     return result;
   }
   static async fetchSources(episodeId, server = "play4u") {
-    if (/play4u\.org\/watch\//i.test(String(episodeId))) {
+    if (/play4u\.org\/(?:watch|series)\//i.test(String(episodeId))) {
       try {
         const html = await fetchPage(episodeId);
         const streamMatch = html.match(/["'](?:m3u8_url|video_url)["']\s*:\s*["'](pa!~[^"']+)["']/i);
         const directStream = decodePlay4uStream(streamMatch?.[1] || "");
         if (directStream) {
+          const skipSegments = extractPlay4uSkipSegments(html);
           let subtitles = [];
           try {
             const manifest = String((await import_axios.default.get(directStream, {
@@ -326,13 +356,20 @@ class Play4uProvider {
           return {
             headers: { Referer: episodeId, Origin: BASE_URL },
             sources: [{ url: directStream, quality: "auto", isM3U8: true, server: "play4u" }],
-            subtitles
+            subtitles,
+            skipSegments
           };
         }
       } catch (_) {
       }
     }
-    return import_hdstream4uProvider.HdStream4uProvider.fetchSources(episodeId, server);
+    const legacy = await import_hdstream4uProvider.HdStream4uProvider.fetchSources(episodeId, server);
+    try {
+      const skipSegments = extractPlay4uSkipSegments(await fetchPage(episodeId));
+      return skipSegments.length ? { ...legacy, skipSegments } : legacy;
+    } catch (_) {
+      return legacy;
+    }
   }
 }
 // Annotate the CommonJS export names for ESM import in node:

@@ -22,6 +22,25 @@ const decodePlay4uStream = (token: string) => {
   }
   return /^https?:\/\/[^"'\\\s]+/i.test(decoded) ? decoded : '';
 };
+const extractPlay4uSkipSegments = (html: string) => {
+  const match = String(html || '').match(/window\.__PA_SKIP__\s*=\s*(\{[\s\S]*?\})\s*;/i);
+  if (!match?.[1]) return [];
+  try {
+    const payload = JSON.parse(match[1]);
+    return (Array.isArray(payload?.items) ? payload.items : [])
+      .map((item: any) => ({
+        type: String(item?.type || '').toLowerCase(),
+        start: Number(item?.start),
+        end: item?.end == null ? undefined : Number(item.end),
+      }))
+      .filter((item: any) => ['recap', 'intro', 'credits', 'outro'].includes(item.type)
+        && Number.isFinite(item.start)
+        && (item.end == null || Number.isFinite(item.end))
+        && (item.end == null || item.end > item.start));
+  } catch (_) {
+    return [];
+  }
+};
 const tmdbKey = () => String(process.env.TMDB_KEY || '').trim();
 const infoCache = new Map<string, { expires: number; value: any }>();
 const INFO_CACHE_TTL = 10 * 60 * 1000;
@@ -82,7 +101,26 @@ const parseCard = ($: cheerio.CheerioAPI, el: any) => {
   const year = Number(String(card.attr('data-year') || link.find('.poster-sub').text().match(/\b(?:19|20)\d{2}\b/)?.[0] || '0')) || undefined;
   const poster = String(link.find('img').attr('src') || '').trim();
   if (!href || !title) return null;
-  return { id: absolute(href), url: absolute(href), title, name: title, year, image: poster, poster, type: href.includes('/series/') ? 'tv' : 'movie' };
+  // Play4u uses different badge classes depending on the title/template.
+  // Read the visible non-language badge as a fallback so every TV card keeps
+  // the same badge Play4u shows, not only cards using .badge-new-ep.
+  const badgeText = String(card.find('.poster-badges .badge-chip').toArray()
+    .map((node) => $(node).text().trim())
+    .find((text) => text && !/^(?:[a-z]{2,3})(?:\s*[·,]\s*[a-z]{2,3})*$/i.test(text)) || '').trim();
+  const episodeLabel = String(card.find('.badge-new-ep').first().text() || '').trim() || (/^S\d+\s*EP\d+$/i.test(badgeText) ? badgeText : '');
+  const seasonLabel = String(card.find('.badge-season').first().text() || '').trim() || (badgeText && !episodeLabel ? badgeText : '');
+  return {
+    id: absolute(href),
+    url: absolute(href),
+    title,
+    name: title,
+    year,
+    image: poster,
+    poster,
+    type: href.includes('/series/') ? 'tv' : 'movie',
+    latestLabel: episodeLabel || seasonLabel || '',
+    latestKind: episodeLabel ? 'episode' : (seasonLabel ? 'season' : ''),
+  };
 };
 
 const parseEpisodes = ($: cheerio.CheerioAPI, url: string) => {
@@ -248,12 +286,13 @@ export class Play4uProvider {
     // Play4u's current watch pages expose the working PlayDrive player in
     // __PA_PLAY__. The old HDStream resolver can return a stale neopulse
     // document instead of an HLS manifest, which causes HLS.js to fail.
-    if (/play4u\.org\/watch\//i.test(String(episodeId))) {
+    if (/play4u\.org\/(?:watch|series)\//i.test(String(episodeId))) {
       try {
         const html = await fetchPage(episodeId);
         const streamMatch = html.match(/["'](?:m3u8_url|video_url)["']\s*:\s*["'](pa!~[^"']+)["']/i);
         const directStream = decodePlay4uStream(streamMatch?.[1] || '');
         if (directStream) {
+          const skipSegments = extractPlay4uSkipSegments(html);
           let subtitles: Array<{ url: string; src: string; label: string; srclang: string; provider: string; referer: string }> = [];
           try {
             const manifest = String((await axios.get(directStream, {
@@ -294,12 +333,19 @@ export class Play4uProvider {
             headers: { Referer: episodeId, Origin: BASE_URL },
             sources: [{ url: directStream, quality: 'auto', isM3U8: true, server: 'play4u' }],
             subtitles,
+            skipSegments,
           };
         }
       } catch (_) {
         // Fall through to the legacy resolver if the watch page is unavailable.
       }
     }
-    return HdStream4uProvider.fetchSources(episodeId, server);
+    const legacy = await HdStream4uProvider.fetchSources(episodeId, server);
+    try {
+      const skipSegments = extractPlay4uSkipSegments(await fetchPage(episodeId));
+      return skipSegments.length ? { ...legacy, skipSegments } : legacy;
+    } catch (_) {
+      return legacy;
+    }
   }
 }
