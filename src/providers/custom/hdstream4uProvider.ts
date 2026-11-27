@@ -241,6 +241,12 @@ const mediaIdFromUrl = (url: string): string => {
   try {
     const parsed = new URL(absolute);
     const baseHost = new URL(BASE_URL).hostname.toLowerCase();
+    // Search results can point at a rotated/dead HDHub hostname (for
+    // example new2.hdhub4u.free). Keep only the path so the current
+    // discovered working base domain is used for the follow-up request.
+    if (/^new\d+\.hdhub4u\.[a-z]{2,}$/i.test(parsed.hostname)) {
+      return `${parsed.pathname.replace(/^\/+|\/+$/g, '')}${parsed.search || ''}`;
+    }
     if (parsed.hostname.toLowerCase() !== baseHost) return absolute;
     return `${parsed.pathname.replace(/^\/+|\/+$/g, '')}${parsed.search || ''}`;
   } catch {

@@ -248,6 +248,9 @@ const mediaIdFromUrl = (url) => {
   try {
     const parsed = new URL(absolute);
     const baseHost = new URL(BASE_URL).hostname.toLowerCase();
+    if (/^new\d+\.hdhub4u\.[a-z]{2,}$/i.test(parsed.hostname)) {
+      return `${parsed.pathname.replace(/^\/+|\/+$/g, "")}${parsed.search || ""}`;
+    }
     if (parsed.hostname.toLowerCase() !== baseHost)
       return absolute;
     return `${parsed.pathname.replace(/^\/+|\/+$/g, "")}${parsed.search || ""}`;
