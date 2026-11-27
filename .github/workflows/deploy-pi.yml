@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: Validate workflow execution
         run: |
-          if [[ "${{ github.repository }}" != "consumet/api.consumet.org" ]]; then
+           if [[ "${{ github.repository }}" != "JeetRana1/FluxiumLab" ]]; then
             echo "ERROR: Unauthorized repository: ${{ github.repository }}"
             exit 1
           fi
@@ -78,7 +78,20 @@ jobs:
           pm2 save --silent
           echo "PM2 process restarted successfully"
 
-      - name: Check PM2 status
-        run: |
-          pm2 status 2>&1 | grep -E "(id|name|status|cpu|memory)" | head -3
-          echo "Deployment completed"
+       - name: Check PM2 status
+         run: |
+           pm2 status 2>&1 | grep -E "(id|name|status|cpu|memory)" | head -3
+           echo "Deployment completed"
+
+       - name: Check local API health
+         run: |
+           for attempt in {1..12}; do
+             if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3000/ >/dev/null; then
+               echo "API health check passed"
+               exit 0
+             fi
+             sleep 2
+           done
+           echo "API health check failed"
+           pm2 logs consumet-api --lines 80 --nostream || true
+           exit 1
