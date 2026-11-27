@@ -34,12 +34,35 @@ module.exports = __toCommonJS(play4uProvider_exports);
 var cheerio = __toESM(require("cheerio"));
 var import_axios = __toESM(require("axios"));
 var import_hdstream4uProvider = require("./hdstream4uProvider");
+var import_outboundProxy = require("../../utils/outboundProxy");
 const BASE_URL = "https://play4u.org";
 const headers = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 };
-const fetchPage = async (url) => String((await import_axios.default.get(url, { headers, timeout: 15e3 })).data || "");
+const fetchPage = async (url) => {
+  const configured = String(process.env.PLAY4U_PROXY || "").trim();
+  const proxies = configured ? [configured] : (await (0, import_outboundProxy.getProxyCandidates)()).filter(Boolean);
+  const candidates = [...proxies, ""];
+  let lastError;
+  for (const proxy of candidates) {
+    try {
+      const response = await import_axios.default.get(url, {
+        headers,
+        timeout: 15e3,
+        ...proxy ? (0, import_outboundProxy.toAxiosProxyOptions)(proxy) : {}
+      });
+      return String(response.data || "");
+    } catch (error) {
+      lastError = error;
+      if (error?.response?.status !== 403 && error?.response?.status !== 429) {
+        if (!proxy)
+          break;
+      }
+    }
+  }
+  throw lastError || new Error("Play4u request failed");
+};
 const absolute = (value) => new URL(value, BASE_URL).href;
 const decodePlay4uStream = (token) => {
   const raw = String(token || "").trim();

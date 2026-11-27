@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import axios from 'axios';
 import { HdStream4uProvider } from './hdstream4uProvider';
+import { getProxyCandidates, toAxiosProxyOptions } from '../../utils/outboundProxy';
 
 const BASE_URL = 'https://play4u.org';
 const headers = {
@@ -8,7 +9,32 @@ const headers = {
   Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
-const fetchPage = async (url: string) => String((await axios.get(url, { headers, timeout: 15000 })).data || '');
+const fetchPage = async (url: string) => {
+  const configured = String(process.env.PLAY4U_PROXY || '').trim();
+  const proxies = configured
+    ? [configured]
+    : (await getProxyCandidates()).filter(Boolean);
+  const candidates = [...proxies, ''];
+  let lastError: unknown;
+  for (const proxy of candidates) {
+    try {
+      const response = await axios.get(url, {
+        headers,
+        timeout: 15000,
+        ...(proxy ? toAxiosProxyOptions(proxy) : {}),
+      } as any);
+      return String(response.data || '');
+    } catch (error: any) {
+      lastError = error;
+      // A blocked/rate-limited egress should rotate to the next configured
+      // proxy instead of retrying the same production IP.
+      if (error?.response?.status !== 403 && error?.response?.status !== 429) {
+        if (!proxy) break;
+      }
+    }
+  }
+  throw lastError || new Error('Play4u request failed');
+};
 const absolute = (value: string) => new URL(value, BASE_URL).href;
 const decodePlay4uStream = (token: string) => {
   const raw = String(token || '').trim();
