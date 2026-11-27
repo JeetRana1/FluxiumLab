@@ -366,10 +366,7 @@ const fetchYouTubeTrailer = async (
   return null;
 };
 
-// Map of anime providers that have direct routes in this API
-const ANIME_PROVIDER_ROUTES: Record<string, string> = {
-  animesalt: '/anime/animesalt',
-};
+const ANIME_PROVIDER_ROUTES: Record<string, string> = {};
 
 const resolveMovieProvider = (provider?: string) => {
   if (!provider) return undefined;
@@ -1050,68 +1047,6 @@ const buildAnimesaltTmdbInfo = async (request: any, id: string, type: string) =>
     : await fetchBase();
 
   await attachBestTrailer(baseInfo, id, type);
-
-  const titleCandidates = getTitleCandidatesFromMedia(baseInfo);
-  if (!titleCandidates.length) return baseInfo;
-
-  const yearGuess = Number(
-    String(baseInfo?.releaseDate || baseInfo?.firstAirDate || '').slice(0, 4),
-  );
-
-  // Search AnimeSalt with primary titles
-  const term = titleCandidates[0];
-  try {
-    const searchRes = await request.server.inject({
-      method: 'GET',
-      url: `/anime/animesalt/${encodeURIComponent(term)}`,
-    });
-
-    if (searchRes.statusCode < 400) {
-      const payload = safeJsonParse(searchRes.body || '{}');
-      const results = Array.isArray(payload?.results) ? payload.results : [];
-
-      const scored = results
-        .map((item: any) => {
-          const itemTitle = String(item?.title || '');
-          let score = titleMatchScore(itemTitle, titleCandidates);
-
-          if (Number.isFinite(yearGuess) && yearGuess > 1900) {
-            const itemYear = Number(String(item?.releaseDate || '').slice(0, 4));
-            if (itemYear === yearGuess) score += 50;
-          }
-
-          return { item, score };
-        })
-        .sort((a: any, b: any) => b.score - a.score);
-
-      const pick = scored[0]?.item;
-      if (pick && pick.anilistId) {
-        const anilistId = String(pick.anilistId);
-
-        if (Array.isArray(baseInfo.seasons)) {
-          baseInfo.seasons = baseInfo.seasons.map((season: any) => {
-            if (!Array.isArray(season.episodes)) return season;
-            return {
-              ...season,
-              episodes: season.episodes.map((ep: any) => ({
-                ...ep,
-                id: `${anilistId}$episode$${ep.episode || ep.number}`,
-              })),
-            };
-          });
-        } else if (Array.isArray(baseInfo.episodes)) {
-          baseInfo.episodes = baseInfo.episodes.map((ep: any) => ({
-            ...ep,
-            id: `${anilistId}$episode$${ep.episode || ep.number}`,
-          }));
-        }
-        baseInfo.anilistId = anilistId;
-        baseInfo.id = anilistId;
-      }
-    }
-  } catch {
-    // ignore mapping errors
-  }
 
   convertTmdbImagesToUrls(baseInfo);
   return baseInfo;

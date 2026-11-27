@@ -481,6 +481,9 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
   };
   const fetchHlsResource = async (url, isManifest, incomingRange, referer, cookieHeader, signal, isSubtitle = false) => {
     const isAnimeSaltCdn = /^https?:\/\/(?:as-cdn\d+|z\d+)\.(?:top|ac|pro|xyz|click|link|net|cc|org)\//i.test(url);
+    const isAniKotoMegaplayCdn = /^https?:\/\/[^/]*\.(?:nexabloom\.top|vertexhub\.bar|novacdn\.autos)\//i.test(url);
+    const isRotatingAniKotoMegaplayCdn = /megaplay\.buzz/i.test(String(referer || "")) && /^https?:\/\/[^/]+\/(?:anime|audio)\//i.test(url);
+    const isAniKotoCdn = isAniKotoMegaplayCdn || isRotatingAniKotoMegaplayCdn;
     const isIbyteCdn = /^https?:\/\/[^/]*\.ibyteimg\.com\//i.test(url);
     const isTikTokCdn = /^https?:\/\/[^/]*\.tiktokcdn\.com\//i.test(url);
     const nodeVariants = hubstreamNodeVariants(url);
@@ -490,13 +493,13 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const isMorencius = /^https?:\/\/morencius\.com\//i.test(url);
     const isAcekCdn = /^https?:\/\/[^/]*\.acek-cdn\.com\//i.test(url);
     const isStructuredPlayer = /^https:\/\/(?:play4u\.org|vidaraa\.cc)(?:\/|$)/i.test(referer);
-    const proxyCandidates = isStructuredPlayer || isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius ? [""] : isAcekCdn ? ["", ...(0, import_outboundProxy.getProxyCandidatesSync)()] : [...(0, import_outboundProxy.getProxyCandidatesSync)(), ""];
+    const proxyCandidates = isStructuredPlayer || isAnimeSaltCdn || isAniKotoCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius ? [""] : isAcekCdn ? ["", ...(0, import_outboundProxy.getProxyCandidatesSync)()] : [...(0, import_outboundProxy.getProxyCandidatesSync)(), ""];
     let lastError = null;
     const effectiveReferer = (() => {
       const safeReferer = String(referer || "").trim();
       if (!safeReferer)
         return safeReferer;
-      if (/^https?:\/\/cdn\.mewstream\.[^/]+\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/vidtub\.(?:shiora\.(?:top|site)|akirax\.buzz)\//i.test(url) || /^https?:\/\/(?:megap\.)?[^/]*\.(?:mikora\.top|norami\.top|shiora\.(?:top|site))\//i.test(url) || /^https?:\/\/(?:megap\.mikora\.top|megap\.norami\.top|megap\.akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.kryntal\.top\//i.test(url) || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url)) {
+      if (/^https?:\/\/cdn\.mewstream\.[^/]+\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/vidtub\.(?:shiora\.(?:top|site)|akirax\.buzz)\//i.test(url) || /^https?:\/\/(?:megap\.)?[^/]*\.(?:mikora\.top|norami\.top|shiora\.(?:top|site))\//i.test(url) || /^https?:\/\/(?:megap\.mikora\.top|megap\.norami\.top|megap\.akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.kryntal\.top\//i.test(url) || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url) || isRotatingAniKotoMegaplayCdn) {
         return "https://megaplay.buzz/";
       }
       const isAnimeSaltSiteReferer = /^https?:\/\/animesalt\.(?:cx|ac|pro|xyz|click)(?:\/|$)/i.test(safeReferer);
@@ -633,6 +636,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     ).trim();
     const cookieParam = String(new URLSearchParams(rawQuery).get("cookie") || "").trim();
     const subtitleParam = String(new URLSearchParams(rawQuery).get("subtitle") || "").trim() === "1";
+    const isSubtitleMediaRequest = subtitleParam && !/\/seg-[^/]+$/i.test(wildcardPath);
     const subtitlePlaylistParam = String(new URLSearchParams(rawQuery).get("subtitlePlaylist") || "").trim() === "1";
     const segmentParam = String(new URLSearchParams(rawQuery).get("segment") || "").trim() === "1";
     const passthroughQuery = rawQuery.split("&").filter((part) => part && !/^(referer|segment|cookie|subtitle|subtitlePlaylist|externalSubtitles)=/i.test(part)).join("&");
@@ -649,7 +653,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       request.headers.referer || request.headers.referrer || ""
     ).trim().replace(/#.*$/, "");
     let requestReferer = (refererParam || incomingReferer || "https://streameeeeee.site/").replace(/#.*$/, "");
-    if (/^https?:\/\/cdn\.mewstream\.[^/]+\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/(?:megap|vidtub)\.(?:shiora\.(?:top|site)|akirax\.buzz)\//i.test(url) || /^https?:\/\/(?:megap\.mikora\.top|megap\.norami\.top|megap\.akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url)) {
+    if (/^https?:\/\/cdn\.mewstream\.[^/]+\//i.test(url) || /^https?:\/\/cdn\.watching\.onl\//i.test(url) || /^https?:\/\/[^/]+\.livedns\.[^/]+\//i.test(url) || /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) || /^https?:\/\/(?:megap|vidtub)\.(?:shiora\.(?:top|site)|akirax\.buzz)\//i.test(url) || /^https?:\/\/(?:megap\.mikora\.top|megap\.norami\.top|megap\.akirax\.buzz)\//i.test(url) || /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url) || /megaplay\.buzz/i.test(requestReferer) && /^https?:\/\/[^/]+\/(?:anime|audio)\//i.test(url)) {
       requestReferer = "https://megaplay.buzz/";
     }
     if (isManifest && !incomingRange) {
@@ -684,7 +688,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       }
     }
     try {
-      const response = subtitleParam && !isManifest ? await import_axios.default.get(url, {
+      const response = isSubtitleMediaRequest && !isManifest ? await import_axios.default.get(url, {
         headers: {
           Referer: requestReferer,
           Accept: "text/vtt,text/plain,application/javascript,*/*",
@@ -733,7 +737,7 @@ const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
         return reply.send(stripExternalSubtitles(content));
       }
-      if (subtitleParam) {
+      if (isSubtitleMediaRequest) {
         const subtitleStream = response.data;
         const subtitleContent = subtitleStream && typeof subtitleStream[Symbol.asyncIterator] === "function" ? Buffer.concat(
           await (async () => {

@@ -151,6 +151,10 @@ export const fetchCurrentAniKotoSources = async (
   }
 
   const result: any = { headers: { Referer: BASE_URL } };
+  let firstSourceResolve: (() => void) | null = null;
+  const firstSource = new Promise<void>((resolve) => {
+    firstSourceResolve = resolve;
+  });
 
   // Resolve every server group concurrently (bounded pool). AniKoto commonly
   // exposes 4-6 mirrors, and each mirror needs 4-5 chained upstream requests;
@@ -251,12 +255,17 @@ export const fetchCurrentAniKotoSources = async (
             });
           }
         }
+        firstSourceResolve?.();
+        firstSourceResolve = null;
       } catch {
         // Continue with the next server; AniKoto commonly exposes multiple mirrors.
       }
     }
   };
-  await Promise.all(Array.from({ length: poolSize }, () => worker()));
+  const workers = Array.from({ length: poolSize }, () => worker());
+  // Start playback as soon as one mirror resolves instead of waiting for
+  // every alternate server. The other workers continue collecting fallbacks.
+  await Promise.race([Promise.all(workers), firstSource]);
 
   return hasSources(result) ? result : null;
 };

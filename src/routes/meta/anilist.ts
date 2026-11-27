@@ -62,65 +62,6 @@ const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
         console.warn('[Anilist] MAL fallback search failed:', err?.message || err);
       }
 
-      // AnimeSalt only indexes anime, so its catalog is a reliable substitute
-      // for anime detection when AniList and MyAnimeList are unreachable.
-      // Map rows into the AniList search shape so existing title-matching
-      // logic keeps working.
-      try {
-        const fallbackRes = await request.server.inject({
-          method: 'GET',
-          url: `/anime/animesalt/${encodeURIComponent(query)}`,
-        });
-        if (fallbackRes.statusCode === 200) {
-          let fallbackRows: any[] = [];
-          try {
-            fallbackRows = JSON.parse(fallbackRes.body || '[]');
-          } catch {
-            fallbackRows = [];
-          }
-          if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
-            const mapped = fallbackRows.slice(0, perPage).map((row) => {
-              const title = String(row?.title || '').trim();
-              return {
-                id: String(row?.id || ''),
-                malId: null,
-                title: {
-                  romaji: title,
-                  english: title,
-                  native: title,
-                  userPreferred: title,
-                },
-                image: row?.image || null,
-                cover: null,
-                description: null,
-                status: null,
-                rating: null,
-                genres: [],
-                totalEpisodes: null,
-                currentEpisodeCount: null,
-                type: row?.type || 'tv',
-                releaseDate: null,
-                year: null,
-                startDate: null,
-              };
-            });
-            reply.status(200).send({
-              currentPage: page,
-              hasNextPage: false,
-              totalPages: 1,
-              totalResults: mapped.length,
-              results: mapped,
-            });
-            return;
-          }
-        }
-      } catch (err: any) {
-        console.warn(
-          '[Anilist] AnimeSalt fallback search failed:',
-          err?.message || err,
-        );
-      }
-
       reply.status(200).send({ results: [], message: 'No results found' });
     } catch (err: any) {
       console.error('[Anilist] Search error:', err?.message || err);

@@ -169,6 +169,10 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
     });
   }
   const result = { headers: { Referer: BASE_URL } };
+  let firstSourceResolve = null;
+  const firstSource = new Promise((resolve) => {
+    firstSourceResolve = resolve;
+  });
   let nextIndex = 0;
   const poolSize = Math.min(4, groups.length);
   const worker = async () => {
@@ -259,11 +263,14 @@ const fetchCurrentAniKotoSources = async (episodeId, server) => {
             });
           }
         }
+        firstSourceResolve?.();
+        firstSourceResolve = null;
       } catch {
       }
     }
   };
-  await Promise.all(Array.from({ length: poolSize }, () => worker()));
+  const workers = Array.from({ length: poolSize }, () => worker());
+  await Promise.race([Promise.all(workers), firstSource]);
   return hasSources(result) ? result : null;
 };
 // Annotate the CommonJS export names for ESM import in node:

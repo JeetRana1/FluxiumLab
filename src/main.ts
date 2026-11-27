@@ -614,6 +614,12 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     isSubtitle = false,
   ) => {
     const isAnimeSaltCdn = /^https?:\/\/(?:as-cdn\d+|z\d+)\.(?:top|ac|pro|xyz|click|link|net|cc|org)\//i.test(url);
+    const isAniKotoMegaplayCdn =
+      /^https?:\/\/[^/]*\.(?:nexabloom\.top|vertexhub\.bar|novacdn\.autos)\//i.test(url);
+    const isRotatingAniKotoMegaplayCdn =
+      /megaplay\.buzz/i.test(String(referer || '')) &&
+      /^https?:\/\/[^/]+\/(?:anime|audio)\//i.test(url);
+    const isAniKotoCdn = isAniKotoMegaplayCdn || isRotatingAniKotoMegaplayCdn;
     // AnimeKai's Megaplay playlists can use a CDN for segments.
     // Those requests are reachable directly but commonly hang through the
     // configured outbound proxies, adding 15 seconds per segment retry.
@@ -641,7 +647,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     // IP. Sending playback via an outbound proxy changes that IP and can stall
     // or invalidate the token. Preserve the extraction route for child media.
     const isStructuredPlayer = /^https:\/\/(?:play4u\.org|vidaraa\.cc)(?:\/|$)/i.test(referer);
-    const proxyCandidates = isStructuredPlayer || isAnimeSaltCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius
+    const proxyCandidates = isStructuredPlayer || isAnimeSaltCdn || isAniKotoCdn || isIbyteCdn || isTikTokCdn || isHubstreamCdn || isShioraCdn || isMorencius
       ? ['']
       : isAcekCdn
         ? ['', ...getProxyCandidatesSync()]
@@ -664,6 +670,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
         /^https?:\/\/(?:megap\.mikora\.top|megap\.norami\.top|megap\.akirax\.buzz)\//i.test(url) ||
         /^https?:\/\/[^/]*\.kryntal\.top\//i.test(url) ||
         /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url)
+          || isRotatingAniKotoMegaplayCdn
       ) {
         return 'https://megaplay.buzz/';
       }
@@ -856,6 +863,10 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     const cookieParam = String(new URLSearchParams(rawQuery).get('cookie') || '').trim();
     const subtitleParam =
       String(new URLSearchParams(rawQuery).get('subtitle') || '').trim() === '1';
+    // Some HLS subtitle playlists propagate subtitle=1 onto media fragments
+    // whose extensions are intentionally misleading (.js/.css). Those are
+    // still binary media and must not be decoded or returned as WebVTT.
+    const isSubtitleMediaRequest = subtitleParam && !/\/seg-[^/]+$/i.test(wildcardPath);
     const subtitlePlaylistParam =
       String(new URLSearchParams(rawQuery).get('subtitlePlaylist') || '').trim() === '1';
     const segmentParam =
@@ -899,7 +910,8 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       /^https?:\/\/[^/]*\.akirax\.buzz\//i.test(url) ||
       /^https?:\/\/(?:megap|vidtub)\.(?:shiora\.(?:top|site)|akirax\.buzz)\//i.test(url) ||
       /^https?:\/\/(?:megap\.mikora\.top|megap\.norami\.top|megap\.akirax\.buzz)\//i.test(url) ||
-      /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url)
+      /^https?:\/\/[^/]*\.imgnex\.top\//i.test(url) ||
+      (/megaplay\.buzz/i.test(requestReferer) && /^https?:\/\/[^/]+\/(?:anime|audio)\//i.test(url))
     ) {
       requestReferer = 'https://megaplay.buzz/';
     }
@@ -944,7 +956,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
     }
 
     try {
-      const response = subtitleParam && !isManifest
+      const response = isSubtitleMediaRequest && !isManifest
         ? await axios.get(url, {
             headers: {
               Referer: requestReferer,
@@ -1022,7 +1034,7 @@ export const tmdbApi = process.env.TMDB_KEY && process.env.TMDB_KEY;
       // Play4u serves WebVTT subtitle fragments with misleading media
       // extensions and generic/binary content types. HLS.js needs the
       // fragment identified as WebVTT to parse and display its cues.
-      if (subtitleParam) {
+      if (isSubtitleMediaRequest) {
         const subtitleStream = response.data as any;
         const subtitleContent =
           subtitleStream && typeof subtitleStream[Symbol.asyncIterator] === 'function'

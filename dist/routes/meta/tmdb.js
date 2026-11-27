@@ -319,9 +319,7 @@ const fetchYouTubeTrailer = async (title, year) => {
   }
   return null;
 };
-const ANIME_PROVIDER_ROUTES = {
-  animesalt: "/anime/animesalt"
-};
+const ANIME_PROVIDER_ROUTES = {};
 const resolveMovieProvider = (provider) => {
   if (!provider)
     return void 0;
@@ -835,58 +833,6 @@ const buildAnimesaltTmdbInfo = async (request, id, type) => {
     import_main.REDIS_TTL
   ) : await fetchBase();
   await attachBestTrailer(baseInfo, id, type);
-  const titleCandidates = getTitleCandidatesFromMedia(baseInfo);
-  if (!titleCandidates.length)
-    return baseInfo;
-  const yearGuess = Number(
-    String(baseInfo?.releaseDate || baseInfo?.firstAirDate || "").slice(0, 4)
-  );
-  const term = titleCandidates[0];
-  try {
-    const searchRes = await request.server.inject({
-      method: "GET",
-      url: `/anime/animesalt/${encodeURIComponent(term)}`
-    });
-    if (searchRes.statusCode < 400) {
-      const payload = safeJsonParse(searchRes.body || "{}");
-      const results = Array.isArray(payload?.results) ? payload.results : [];
-      const scored = results.map((item) => {
-        const itemTitle = String(item?.title || "");
-        let score = titleMatchScore(itemTitle, titleCandidates);
-        if (Number.isFinite(yearGuess) && yearGuess > 1900) {
-          const itemYear = Number(String(item?.releaseDate || "").slice(0, 4));
-          if (itemYear === yearGuess)
-            score += 50;
-        }
-        return { item, score };
-      }).sort((a, b) => b.score - a.score);
-      const pick = scored[0]?.item;
-      if (pick && pick.anilistId) {
-        const anilistId = String(pick.anilistId);
-        if (Array.isArray(baseInfo.seasons)) {
-          baseInfo.seasons = baseInfo.seasons.map((season) => {
-            if (!Array.isArray(season.episodes))
-              return season;
-            return {
-              ...season,
-              episodes: season.episodes.map((ep) => ({
-                ...ep,
-                id: `${anilistId}$episode$${ep.episode || ep.number}`
-              }))
-            };
-          });
-        } else if (Array.isArray(baseInfo.episodes)) {
-          baseInfo.episodes = baseInfo.episodes.map((ep) => ({
-            ...ep,
-            id: `${anilistId}$episode$${ep.episode || ep.number}`
-          }));
-        }
-        baseInfo.anilistId = anilistId;
-        baseInfo.id = anilistId;
-      }
-    }
-  } catch {
-  }
   convertTmdbImagesToUrls(baseInfo);
   return baseInfo;
 };

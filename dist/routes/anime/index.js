@@ -32,10 +32,8 @@ __export(anime_exports, {
 });
 module.exports = __toCommonJS(anime_exports);
 var import_extensions = require("@consumet/extensions");
-var import_animesalt = __toESM(require("./animesalt"));
 var import_anikoto = __toESM(require("./anikoto"));
 const routes = async (fastify, options) => {
-  await fastify.register(import_animesalt.default, { prefix: "/animesalt" });
   await fastify.register(import_anikoto.default, { prefix: "/anikoto" });
   fastify.get("/", async (request, reply) => {
     reply.status(200).send("Welcome to Consumet Anime \u{1F5FE}");

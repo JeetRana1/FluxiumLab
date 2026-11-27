@@ -1,11 +1,9 @@
 import { FastifyRequest, FastifyReply, FastifyInstance, RegisterOptions } from 'fastify';
 import { PROVIDERS_LIST } from '@consumet/extensions';
 
-import animesalt from './animesalt';
 import anikoto from './anikoto';
 
 const routes = async (fastify: FastifyInstance, options: RegisterOptions) => {
-  await fastify.register(animesalt, { prefix: '/animesalt' });
   await fastify.register(anikoto, { prefix: '/anikoto' });
 
   fastify.get('/', async (request: any, reply: any) => {

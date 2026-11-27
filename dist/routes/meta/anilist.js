@@ -83,60 +83,6 @@ const routes = async (fastify, options) => {
       } catch (err) {
         console.warn("[Anilist] MAL fallback search failed:", err?.message || err);
       }
-      try {
-        const fallbackRes = await request.server.inject({
-          method: "GET",
-          url: `/anime/animesalt/${encodeURIComponent(query)}`
-        });
-        if (fallbackRes.statusCode === 200) {
-          let fallbackRows = [];
-          try {
-            fallbackRows = JSON.parse(fallbackRes.body || "[]");
-          } catch {
-            fallbackRows = [];
-          }
-          if (Array.isArray(fallbackRows) && fallbackRows.length > 0) {
-            const mapped = fallbackRows.slice(0, perPage).map((row) => {
-              const title = String(row?.title || "").trim();
-              return {
-                id: String(row?.id || ""),
-                malId: null,
-                title: {
-                  romaji: title,
-                  english: title,
-                  native: title,
-                  userPreferred: title
-                },
-                image: row?.image || null,
-                cover: null,
-                description: null,
-                status: null,
-                rating: null,
-                genres: [],
-                totalEpisodes: null,
-                currentEpisodeCount: null,
-                type: row?.type || "tv",
-                releaseDate: null,
-                year: null,
-                startDate: null
-              };
-            });
-            reply.status(200).send({
-              currentPage: page,
-              hasNextPage: false,
-              totalPages: 1,
-              totalResults: mapped.length,
-              results: mapped
-            });
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn(
-          "[Anilist] AnimeSalt fallback search failed:",
-          err?.message || err
-        );
-      }
       reply.status(200).send({ results: [], message: "No results found" });
     } catch (err) {
       console.error("[Anilist] Search error:", err?.message || err);
